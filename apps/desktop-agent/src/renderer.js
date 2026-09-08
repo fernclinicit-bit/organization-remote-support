@@ -16,6 +16,9 @@ let socket;
 let peer;
 let stream;
 let controlChannel;
+let inputChannel;
+let videoSender;
+let qualityTimer;
 const incomingFiles = new Map();
 let fileChannel;
 let binaryFile;
@@ -90,9 +93,29 @@ async function acceptOffer(sdp) {
   send({ type: "answer", sdp: answer.sdp });
 }
 
+let latestMove;
+let moveInFlight = false;
+async function queueInput(event) {
+  if (event?.type !== "move") return window.remoteAgent.input(event);
+  latestMove = event;
+  if (moveInFlight) return;
+  moveInFlight = true;
+  try { while (latestMove) { const current = latestMove; latestMove = undefined; await window.remoteAgent.input(current); } }
+  finally { moveInFlight = false; }
+}
+
+async function adaptVideoQuality() {
+  if (!videoSender) return;
+  const stats = await videoSender.getStats(); let loss = 0; let rtt = 0;
+  stats.forEach((report) => { if (report.type === "remote-inbound-rtp" && report.kind === "video") { loss = report.fractionLost || 0; rtt = report.roundTripTime || 0; } });
+  const target = loss > .08 || rtt > .4 ? 1_200_000 : loss > .03 || rtt > .2 ? 2_000_000 : 3_500_000;
+  const parameters = videoSender.getParameters(); parameters.encodings ??= [{}]; if (!parameters.encodings.length) parameters.encodings.push({});
+  if (parameters.encodings[0].maxBitrate !== target) { parameters.encodings[0].maxBitrate = target; parameters.encodings[0].maxFramerate = target < 2_000_000 ? 20 : 30; await videoSender.setParameters(parameters); }
+}
+
 async function handleControl(message) {
   if (!message || typeof message !== "object") return;
-  if (message.kind === "input" && elements.allowControl.checked) await window.remoteAgent.input(message.event);
+  if (message.kind === "input" && elements.allowControl.checked) await queueInput(message.event);
   if (message.kind === "clipboard-set" && elements.allowClipboard.checked) await window.remoteAgent.clipboardWrite(message.text);
   if (message.kind === "clipboard-get" && elements.allowClipboard.checked) {
     const text = await window.remoteAgent.clipboardRead();
@@ -123,6 +146,15 @@ function attachControlChannel(channel) {
     }
   };
   channel.onclose = () => { controlChannel = undefined; };
+}
+
+function attachInputChannel(channel) {
+  inputChannel = channel;
+  channel.onmessage = ({ data }) => {
+    try { const message = JSON.parse(data); if (message.kind === "input" && elements.allowControl.checked) queueInput(message.event).catch((error) => setStatus(`ควบคุมไม่ได้: ${error instanceof Error ? error.message : String(error)}`)); }
+    catch (error) { setStatus(`ควบคุมไม่ได้: ${error instanceof Error ? error.message : String(error)}`); }
+  };
+  channel.onclose = () => { inputChannel = undefined; };
 }
 
 function attachFileChannel(channel) {
@@ -166,7 +198,7 @@ async function start() {
       if (window.remoteAgent.platform === "darwin" && diagnostics.permissions.accessibility !== "granted") throw new Error("กรุณาอนุญาต Accessibility ใน System Settings");
       setStatus(`Native control พร้อม (${diagnostics.screen.width}×${diagnostics.screen.height})`);
     }
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 }, width: { ideal: 1920, max: 2560 }, height: { ideal: 1080, max: 1440 } }, audio: false });
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } }, audio: false });
     elements.preview.srcObject = stream;
     elements.preview.hidden = false;
     peer = new RTCPeerConnection(rtcConfiguration());
@@ -176,17 +208,25 @@ async function start() {
       const parameters = sender.getParameters();
       parameters.encodings ??= [{}];
       if (!parameters.encodings.length) parameters.encodings.push({});
-      parameters.encodings[0].maxBitrate = 8_000_000;
+      parameters.encodings[0].maxBitrate = 3_500_000;
       parameters.encodings[0].maxFramerate = 30;
       parameters.degradationPreference = "maintain-framerate";
       sender.setParameters(parameters).catch(console.error);
+      if (track.kind === "video") videoSender = sender;
     }
     peer.onicecandidate = ({ candidate }) => { if (candidate) send({ type: "ice-candidate", candidate }); };
     peer.ondatachannel = ({ channel }) => {
       if (channel.label === "control") attachControlChannel(channel);
+      if (channel.label === "input") attachInputChannel(channel);
       if (channel.label === "file-transfer") attachFileChannel(channel);
     };
-    peer.onconnectionstatechange = () => setStatus(`WebRTC: ${peer.connectionState}`, peer.connectionState === "connected");
+    peer.onconnectionstatechange = () => {
+      setStatus(`WebRTC: ${peer.connectionState}`, peer.connectionState === "connected");
+      if (peer.connectionState === "connected") {
+        clearInterval(qualityTimer);
+        qualityTimer = setInterval(() => adaptVideoQuality().catch((error) => console.warn("ปรับคุณภาพภาพไม่ได้", error)), 3000);
+      }
+    };
 
     socket = new WebSocket(elements.server.value);
     socket.addEventListener("open", () => {
@@ -217,9 +257,9 @@ function stop(reason = "ตัดการเชื่อมต่อแล้�
   if (socket?.readyState === WebSocket.OPEN) send({ type: "end", reason: "user-disconnected" });
   socket?.close(); socket = undefined;
   peer?.close(); peer = undefined;
-  controlChannel?.close(); controlChannel = undefined; incomingFiles.clear();
+  controlChannel?.close(); controlChannel = undefined; inputChannel?.close(); inputChannel = undefined; incomingFiles.clear();
   fileChannel?.close(); fileChannel = undefined; binaryFile = undefined;
-  pendingIceCandidates.length = 0;
+  pendingIceCandidates.length = 0; clearInterval(qualityTimer); qualityTimer = undefined; videoSender = undefined;
   stream?.getTracks().forEach((track) => track.stop()); stream = undefined;
   elements.preview.srcObject = null; elements.preview.hidden = true;
   elements.stop.hidden = true; elements.start.disabled = !elements.consent.checked;
@@ -240,4 +280,3 @@ if (window.gsap) {
   window.gsap.from(".brand > *", { opacity: 0, x: -24, duration: .65, stagger: .08, ease: "power2.out" });
   window.gsap.from(".panel > *", { opacity: 0, y: 16, duration: .5, stagger: .035, ease: "power2.out" });
 }
-

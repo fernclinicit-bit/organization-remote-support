@@ -19,6 +19,7 @@ let socket;
 let peer;
 let offerCreated = false;
 let controlChannel;
+let inputChannel;
 let fileChannel;
 let capabilities = { control: false, clipboard: false, files: false, platform: "unknown" };
 let keyboardCapture = false;
@@ -93,6 +94,10 @@ async function sendControlQueued(message) {
   sendControl(message);
 }
 
+function sendRealtimeInput(event) {
+  if (inputChannel?.readyState === "open" && inputChannel.bufferedAmount < 64_000) inputChannel.send(JSON.stringify({ kind: "input", event }));
+}
+
 function updateCapabilities(value) {
   capabilities = value;
   elements.capabilities.textContent = `สิทธิ์: ควบคุม ${value.control ? "✓" : "–"} · คลิปบอร์ด ${value.clipboard ? "✓" : "–"} · ไฟล์ ${value.files ? "✓" : "–"}`;
@@ -113,6 +118,12 @@ function attachControlChannel(channel) {
     if (message.kind === "clipboard-value") { await navigator.clipboard.writeText(message.text); log("คัดลอกข้อความจาก Agent แล้ว"); }
     if (message.kind === "input-error") { setStatus(`Agent ปฏิเสธ input: ${message.message}`); log(`INPUT ERROR: ${message.message}`); }
   };
+}
+
+function attachInputChannel(channel) {
+  inputChannel = channel;
+  channel.onopen = () => log("ช่องเมาส์ความหน่วงต่ำพร้อมใช้งาน");
+  channel.onclose = () => { inputChannel = undefined; };
 }
 
 function attachFileChannel(channel) {
@@ -150,6 +161,7 @@ function connect() {
   const codecs = RTCRtpReceiver.getCapabilities?.("video")?.codecs?.filter((codec) => /VP8|H264/i.test(codec.mimeType));
   if (codecs?.length) videoTransceiver.setCodecPreferences(codecs);
   attachControlChannel(peer.createDataChannel("control", { ordered: true }));
+  attachInputChannel(peer.createDataChannel("input", { ordered: false, maxRetransmits: 0 }));
   attachFileChannel(peer.createDataChannel("file-transfer", { ordered: true }));
   peer.onicecandidate = ({ candidate }) => { if (candidate) send({ type: "ice-candidate", candidate }); };
   peer.ontrack = ({ streams }) => {
@@ -191,6 +203,7 @@ function disconnect(reason = "ตัดการเชื่อมต่อแ�
   socket?.close(); socket = undefined;
   peer?.close(); peer = undefined; offerCreated = false;
   controlChannel?.close(); controlChannel = undefined;
+  inputChannel?.close(); inputChannel = undefined;
   fileChannel?.close(); fileChannel = undefined;
   elements.video.srcObject = null; elements.placeholder.hidden = false;
   elements.disconnect.hidden = true; elements.tools.hidden = true; elements.connect.disabled = false;
@@ -230,7 +243,7 @@ elements.video.addEventListener("pointermove", (event) => {
   if (!capabilities.control) return;
   const position = screenPosition(event); if (!position) return;
   pendingMove = { type: "move", ...position };
-  if (!moveTimer) moveTimer = setTimeout(() => { sendControl({ kind: "input", event: pendingMove }); moveTimer = undefined; }, 33);
+  if (!moveTimer) moveTimer = setTimeout(() => { sendRealtimeInput(pendingMove); moveTimer = undefined; }, 20);
 });
 elements.video.addEventListener("pointerdown", (event) => {
   elements.video.focus();
@@ -243,10 +256,12 @@ elements.video.addEventListener("pointerup", (event) => { if (elements.video.has
 elements.video.addEventListener("contextmenu", (event) => event.preventDefault());
 elements.video.addEventListener("wheel", (event) => { if (capabilities.control) { event.preventDefault(); sendControl({ kind: "input", event: { type: "wheel", delta: event.deltaY } }); } }, { passive: false });
 
-const codeMap = { Space: "Space", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down", ShiftLeft: "LeftShift", ShiftRight: "LeftShift", ControlLeft: "LeftControl", ControlRight: "LeftControl", AltLeft: "LeftAlt", AltRight: "LeftAlt", MetaLeft: "LeftMeta", MetaRight: "LeftMeta", Escape: "Escape", Backspace: "Backspace", Tab: "Tab", Enter: "Enter", Delete: "Delete", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown", CapsLock: "CapsLock", Comma: "Comma", Period: "Period", Slash: "Slash", Backslash: "Backslash", Semicolon: "Semicolon", Quote: "Quote", BracketLeft: "LeftBracket", BracketRight: "RightBracket", Minus: "Minus", Equal: "Equal", Backquote: "Grave" };
+const codeMap = { Space: "Space", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down", ShiftLeft: "LeftShift", ShiftRight: "RightShift", ControlLeft: "LeftControl", ControlRight: "RightControl", AltLeft: "LeftAlt", AltRight: "RightAlt", MetaLeft: "LeftMeta", MetaRight: "RightMeta", Escape: "Escape", Backspace: "Backspace", Tab: "Tab", Enter: "Enter", Delete: "Delete", Insert: "Insert", PrintScreen: "PrintScreen", Pause: "Pause", ContextMenu: "ContextMenu", NumLock: "NumLock", ScrollLock: "ScrollLock", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown", CapsLock: "CapsLock", Comma: "Comma", Period: "Period", Slash: "Slash", Backslash: "Backslash", Semicolon: "Semicolon", Quote: "Quote", BracketLeft: "LeftBracket", BracketRight: "RightBracket", Minus: "Minus", Equal: "Equal", Backquote: "Grave" };
 function remoteKey(event) {
   if (event.code.startsWith("Key")) return event.code.slice(3);
   if (event.code.startsWith("Digit")) return `Num${event.code.slice(5)}`;
+  if (/^Numpad[0-9]$/.test(event.code)) return event.code;
+  if (["NumpadAdd", "NumpadSubtract", "NumpadMultiply", "NumpadDivide", "NumpadDecimal", "NumpadEnter"].includes(event.code)) return event.code;
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.code)) return event.code;
   return codeMap[event.code];
 }
@@ -316,4 +331,3 @@ if (window.gsap) {
   window.gsap.from(".viewer", { opacity: 0, scale: .985, duration: .7, ease: "power2.out" });
 }
 loadAddressBook();
-

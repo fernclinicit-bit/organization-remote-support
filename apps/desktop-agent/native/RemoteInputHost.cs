@@ -31,8 +31,8 @@ class RemoteInputHost {
   static readonly Dictionary<string, byte> Keys = new Dictionary<string, byte>(StringComparer.OrdinalIgnoreCase) {
     {"Escape",0x1B},{"Backspace",0x08},{"Tab",0x09},{"Enter",0x0D},{"Return",0x0D},{"Delete",0x2E},
     {"Home",0x24},{"End",0x23},{"PageUp",0x21},{"PageDown",0x22},{"Space",0x20},{"Left",0x25},
-    {"Up",0x26},{"Right",0x27},{"Down",0x28},{"LeftShift",0x10},{"LeftControl",0x11},{"LeftAlt",0x12},
-    {"LeftMeta",0x5B},{"CapsLock",0x14},{"Comma",0xBC},{"Period",0xBE},{"Slash",0xBF},{"Backslash",0xDC},
+    {"Up",0x26},{"Right",0x27},{"Down",0x28},{"Insert",0x2D},{"PrintScreen",0x2C},{"Pause",0x13},{"ContextMenu",0x5D},{"NumLock",0x90},{"ScrollLock",0x91},{"LeftShift",0xA0},{"RightShift",0xA1},{"LeftControl",0xA2},{"RightControl",0xA3},{"LeftAlt",0xA4},{"RightAlt",0xA5},
+    {"LeftMeta",0x5B},{"RightMeta",0x5C},{"CapsLock",0x14},{"NumpadAdd",0x6B},{"NumpadSubtract",0x6D},{"NumpadMultiply",0x6A},{"NumpadDivide",0x6F},{"NumpadDecimal",0x6E},{"NumpadEnter",0x0D},{"Comma",0xBC},{"Period",0xBE},{"Slash",0xBF},{"Backslash",0xDC},
     {"Semicolon",0xBA},{"Quote",0xDE},{"LeftBracket",0xDB},{"RightBracket",0xDD},{"Minus",0xBD},{"Equal",0xBB},{"Grave",0xC0}
   };
 
@@ -49,6 +49,7 @@ class RemoteInputHost {
     if (Keys.TryGetValue(name, out value)) return value;
     if (name.Length==1 && char.IsLetterOrDigit(name[0])) return (byte)char.ToUpperInvariant(name[0]);
     if (name.StartsWith("Num") && name.Length==4) return (byte)name[3];
+    if (name.StartsWith("Numpad") && name.Length==7 && char.IsDigit(name[6])) return (byte)(0x60+(name[6]-'0'));
     int f;
     if (name.StartsWith("F") && int.TryParse(name.Substring(1), out f) && f>=1 && f<=24) return (byte)(0x6F+f);
     throw new ArgumentException("unsupported key");
