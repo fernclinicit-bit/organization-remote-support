@@ -69,6 +69,11 @@ wss.on("connection", (socket, request) => {
         return;
       }
       let session = sessions.get(message.sessionId);
+      if (!session && message.role !== "agent") {
+        recordAuthFailure(address);
+        rejectSocket(socket, 4404, "agent is not online");
+        return;
+      }
       if (!session) {
         session = { peers: new Map<PeerRole, WebSocket>(), joinToken: message.joinToken, createdAt: Date.now() };
         sessions.set(message.sessionId, session);
