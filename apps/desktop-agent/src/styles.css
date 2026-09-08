@@ -1,0 +1,38 @@
+:root { font-family: Inter, "Segoe UI", sans-serif; color: #172033; background: #eef2f8; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; }
+main { min-height: 100vh; display: grid; grid-template-columns: 42% 58%; }
+.brand { background: linear-gradient(145deg, #07123d, #123aa4); color: white; padding: 58px; display: flex; flex-direction: column; }
+.logo { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: white; color: #123aa4; font-size: 29px; font-weight: 800; }
+.logo { background: center/82% no-repeat url("app-icon.png"), linear-gradient(145deg,#061326,#173b67); color: transparent; box-shadow: 0 0 24px #24d9ff66; }
+.brand h1 { margin: 22px 0 0; font-size: 28px; }
+.brand p { margin: auto 0; font-size: 29px; line-height: 1.35; font-weight: 650; }
+.privacy { padding: 16px; border: 1px solid #7793eb; border-radius: 12px; background: #ffffff12; font-size: 14px; }
+.panel { padding: 48px 58px; overflow: auto; }
+.panel, .brand { will-change: transform, opacity; }
+.status { display: flex; align-items: center; gap: 9px; color: #526078; font-size: 14px; }
+#dot { width: 10px; height: 10px; border-radius: 50%; background: #8793a6; }
+#dot.live { background: #1fb76a; box-shadow: 0 0 0 5px #1fb76a20; }
+h2 { margin: 28px 0; font-size: 25px; }
+label { display: block; margin: 15px 0; font-size: 13px; font-weight: 650; color: #526078; }
+input:not([type="checkbox"]) { width: 100%; margin-top: 7px; padding: 13px 14px; border: 1px solid #cbd3df; border-radius: 9px; font: inherit; color: #172033; background: white; }
+input:focus { outline: 3px solid #2e61da25; border-color: #2e61da; }
+select { width: 100%; margin-top: 7px; padding: 13px 14px; border: 1px solid #cbd3df; border-radius: 9px; background: white; color: #172033; }
+.identityCard { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; margin: 16px 0; padding: 16px; border: 1px solid #9eddf0; border-radius: 12px; background: linear-gradient(145deg,#eafcff,#f3f6ff); }
+.identityCard span { color: #526078; font-size: 12px; font-weight: 700; }
+.identityCard strong { color: #073b66; font-size: 22px; letter-spacing: .12em; }
+.identityCard .secondary { grid-column: 1 / -1; padding: 9px; background: #183b63; }
+.consent { display: flex; gap: 10px; align-items: flex-start; line-height: 1.45; color: #172033; }
+.consent input { margin-top: 3px; }
+fieldset { margin: 16px 0; border: 1px solid #cbd3df; border-radius: 9px; }
+.networkSettings { margin: 14px 0; padding: 10px 12px; border: 1px solid #cbd3df; border-radius: 9px; color: #526078; font-size: 12px; }
+.networkSettings summary { cursor: pointer; color: #176aa0; font-weight: 750; }
+legend { padding: 0 7px; color: #526078; font-size: 12px; font-weight: 700; }
+fieldset .consent { margin: 9px 3px; }
+.notice { padding: 12px; border-radius: 9px; background: #fff7db; color: #735b00; font-size: 13px; }
+button { width: 100%; border: 0; border-radius: 9px; padding: 14px; background: #2457cf; color: white; font-weight: 750; cursor: pointer; }
+button:disabled { background: #b8c0ce; cursor: not-allowed; }
+button.danger { margin-top: 12px; background: #c72e42; }
+video { width: 100%; max-height: 190px; margin-top: 18px; border-radius: 10px; background: #111827; }
+.footnote { font-size: 12px; color: #69758a; text-align: center; }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; } .brand { min-height: 220px; padding: 30px; } .brand p { margin: 28px 0; font-size: 22px; } .panel { padding: 32px; } }

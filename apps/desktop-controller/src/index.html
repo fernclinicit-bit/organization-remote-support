@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws: wss:; media-src blob:; style-src 'self'; script-src 'self'" />
+    <title>IT Remote Support Console</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div><span class="logo">↔</span><strong>IT Support Console</strong></div>
+      <div class="state"><span id="dot"></span><span id="status">ยังไม่เชื่อมต่อ</span></div>
+    </header>
+    <main>
+      <aside>
+        <h1>เชื่อมต่ออุปกรณ์</h1>
+        <label>Signaling server<input id="server" value="wss://laptop-rcsrtpa1.tail898d8c.ts.net/signal" autocomplete="off" /></label>
+        <label>รหัสประจำเครื่อง<input id="sessionId" inputmode="numeric" maxlength="11" placeholder="123 456 789" autocomplete="off" /></label>
+        <label>รหัสผ่าน<input id="joinToken" inputmode="numeric" maxlength="6" placeholder="รหัส 6 หลัก" autocomplete="off" /></label>
+        <div class="addressBookRow">
+          <input id="deviceName" placeholder="ชื่อเครื่อง เช่น Reception-01" />
+          <button id="saveDevice" class="secondary" type="button">บันทึก</button>
+        </div>
+        <label>รายการเครื่องที่บันทึก<select id="savedDevices"><option value="">— เลือกเครื่อง —</option></select></label>
+        <label class="check"><input id="autoReconnect" type="checkbox" checked /> เชื่อมต่อใหม่อัตโนมัติเมื่อสัญญาณหลุด</label>
+        <details class="networkSettings">
+          <summary>ตั้งค่า Internet / TURN</summary>
+          <label>TURN server (เว้นว่างเพื่อใช้ host เดียวกับ Signaling)<input id="turnServer" placeholder="turn:remote.example.org:3478" autocomplete="off" /></label>
+          <label>TURN username<input id="turnUsername" value="remote-service" autocomplete="off" /></label>
+          <label>TURN password<input id="turnPassword" type="password" value="047984" autocomplete="off" /></label>
+          <label class="check"><input id="forceRelay" type="checkbox" /> บังคับวิ่งผ่าน TURN (สำหรับทดสอบต่างเครือข่าย)</label>
+        </details>
+        <button id="connect">เชื่อมต่อ</button>
+        <button id="disconnect" class="danger" hidden>ตัดการเชื่อมต่อ</button>
+        <section class="tools" hidden>
+          <button id="fullscreen" class="secondary">เต็มหน้าจอ</button>
+          <button id="showDesktop" class="secondary">แสดง Desktop เครื่องปลายทาง</button>
+          <div class="shortcutGrid">
+            <button class="secondary" data-shortcut="LeftMeta">Win</button>
+            <button class="secondary" data-shortcut="LeftMeta,D">Win+D</button>
+            <button class="secondary" data-shortcut="LeftMeta,E">Win+E</button>
+            <button class="secondary" data-shortcut="LeftMeta,R">Win+R</button>
+            <button class="secondary" data-shortcut="LeftMeta,Tab">Win+Tab</button>
+            <button class="secondary" data-shortcut="LeftMeta,LeftShift,S">Win+Shift+S</button>
+          </div>
+          <button id="sendClipboard" class="secondary">ส่งคลิปบอร์ดไป Agent</button>
+          <button id="getClipboard" class="secondary">รับคลิปบอร์ดจาก Agent</button>
+          <label class="fileButton">ส่งไฟล์ (สูงสุด 25 MB)<input id="file" type="file" /></label>
+        </section>
+        <section class="info">
+          <strong id="capabilities">รอ Agent แจ้งสิทธิ์</strong>
+          <p>เมาส์และคีย์บอร์ดทำงานเฉพาะเมื่อ Agent อนุญาต กดภายในภาพเพื่อควบคุม</p>
+        </section>
+        <div id="log" aria-live="polite"></div>
+      </aside>
+      <section class="viewer">
+        <div id="dropHint">วางไฟล์ที่นี่เพื่อส่งไปเครื่องปลายทาง</div>
+        <div id="placeholder"><span>▣</span><p>รอภาพจากเครื่องปลายทาง</p></div>
+        <video id="remoteScreen" autoplay playsinline></video>
+        <div id="modeBadge" class="badge">VIEW ONLY</div>
+      </section>
+    </main>
+    <script src="vendor/gsap.min.js"></script>
+    <script type="module" src="renderer.js"></script>
+  </body>
+</html>

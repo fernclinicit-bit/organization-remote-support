@@ -1,0 +1,46 @@
+{
+  "name": "@remote/desktop-agent",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "check": "node --check src/main.js && node --check src/preload.cjs && node --check src/renderer.js",
+    "dist:win": "electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "44.1.1",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "gsap": "^3.13.0",
+    "robotjs": "0.9.1"
+  },
+  "build": {
+    "appId": "org.remote.support.agent",
+    "productName": "Organization Remote Support Agent",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/robotjs/**/*"
+    ],
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/RemoteInputHost.exe",
+        "to": "native/RemoteInputHost.exe"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "src/app-icon.png",
+      "artifactName": "Remote-Support-Agent-${version}-Windows-${arch}.${ext}"
+    }
+  }
+}

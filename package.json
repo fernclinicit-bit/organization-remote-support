@@ -1,0 +1,22 @@
+{
+  "name": "organization-remote-support",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @remote/protocol && npm run build -w @remote/signaling-server",
+    "dev:server": "npm run dev -w @remote/signaling-server",
+    "dev:agent": "npm run dev -w @remote/desktop-agent",
+    "dev:controller": "npm run dev -w @remote/desktop-controller",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "electron@44.1.1": true,
+    "robotjs@0.9.1": true
+  }
+}

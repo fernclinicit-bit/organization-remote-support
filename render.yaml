@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: organization-remote-signaling
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -w @remote/signaling-server
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 30
+    buildFilter:
+      paths:
+        - apps/signaling-server/**
+        - packages/protocol/**
+        - package.json
+        - package-lock.json
+        - render.yaml

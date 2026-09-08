@@ -1,0 +1,30 @@
+services:
+  signaling:
+    build:
+      context: ..
+      dockerfile: apps/signaling-server/Dockerfile
+    environment:
+      SIGNALING_PORT: 8080
+      SESSION_SIGNING_SECRET: ${SESSION_SIGNING_SECRET:?required}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  turn:
+    image: coturn/coturn:4.6.3
+    command:
+      - --no-cli
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=${TURN_REALM:?required}
+      - --user=${TURN_USERNAME:?required}:${TURN_PASSWORD:?required}
+      - --min-port=49160
+      - --max-port=49200
+      - --no-multicast-peers
+      - --no-loopback-peers
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+    restart: unless-stopped
+
