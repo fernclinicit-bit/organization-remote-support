@@ -7,7 +7,6 @@ services:
     startCommand: npm run start -w @remote/signaling-server
     healthCheckPath: /health
     autoDeployTrigger: commit
-    maxShutdownDelaySeconds: 30
     buildFilter:
       paths:
         - apps/signaling-server/**
