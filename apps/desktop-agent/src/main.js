@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, powerSaveBlocker, session, systemPreferences } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, powerSaveBlocker, screen, session, systemPreferences } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -11,6 +11,7 @@ let nativeInputPromise;
 let windowsInputHost;
 let suspensionBlocker;
 let selectedDisplayId;
+let selectedDisplayBounds;
 
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
@@ -48,6 +49,32 @@ function permissionState() {
   };
 }
 
+function rememberSelectedDisplay(source, sources) {
+  if (!source) return;
+  selectedDisplayId = source.id;
+  const displays = screen.getAllDisplays();
+  const sourceIndex = sources.indexOf(source);
+  const display = displays.find((candidate) => String(candidate.id) === String(source.display_id)) ?? displays[sourceIndex] ?? screen.getPrimaryDisplay();
+  selectedDisplayBounds = { ...display.bounds };
+}
+
+function virtualDesktopPoint(input) {
+  const displays = screen.getAllDisplays();
+  const selected = selectedDisplayBounds ?? screen.getPrimaryDisplay().bounds;
+  const left = Math.min(...displays.map((display) => display.bounds.x));
+  const top = Math.min(...displays.map((display) => display.bounds.y));
+  const right = Math.max(...displays.map((display) => display.bounds.x + display.bounds.width));
+  const bottom = Math.max(...displays.map((display) => display.bounds.y + display.bounds.height));
+  const localX = Math.max(0, Math.min(1, Number(input.x)));
+  const localY = Math.max(0, Math.min(1, Number(input.y)));
+  const absoluteX = selected.x + localX * Math.max(1, selected.width - 1);
+  const absoluteY = selected.y + localY * Math.max(1, selected.height - 1);
+  return {
+    x: Math.max(0, Math.min(1, (absoluteX - left) / Math.max(1, right - left - 1))),
+    y: Math.max(0, Math.min(1, (absoluteY - top) / Math.max(1, bottom - top - 1)))
+  };
+}
+
 async function createWindow() {
   const window = new BrowserWindow({
     width: 980,
@@ -69,6 +96,7 @@ async function createWindow() {
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
     const sources = await desktopCapturer.getSources({ types: ["screen"] });
     const selected = sources.find((source) => source.id === selectedDisplayId) ?? sources[0];
+    rememberSelectedDisplay(selected, sources);
     callback({ video: selected, audio: false });
   });
 
@@ -80,7 +108,12 @@ ipcMain.handle("desktop:list", async () => {
   const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
   return sources.map((source, index) => ({ id: source.id, name: source.name || `Display ${index + 1}` }));
 });
-ipcMain.handle("desktop:select", (_event, id) => { selectedDisplayId = String(id || ""); return true; });
+ipcMain.handle("desktop:select", async (_event, id) => {
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+  const selected = sources.find((source) => source.id === String(id || "")) ?? sources[0];
+  rememberSelectedDisplay(selected, sources);
+  return { id: selected?.id, bounds: selectedDisplayBounds };
+});
 ipcMain.handle("permissions:accessibility", () => {
   if (process.platform !== "darwin") return true;
   return systemPreferences.isTrustedAccessibilityClient(true);
@@ -121,7 +154,7 @@ for (let index = 0; index <= 9; index += 1) keyMap[`Num${index}`] = String(index
 ipcMain.handle("remote:input", async (_event, input) => {
   if (!sessionGrants.control) throw new Error("remote control not granted");
   if (process.platform === "win32") {
-    if (input?.type === "move") writeWindowsInput(`MOVE ${Math.max(0,Math.min(1,Number(input.x)))} ${Math.max(0,Math.min(1,Number(input.y)))}`);
+    if (input?.type === "move") { const point = virtualDesktopPoint(input); writeWindowsInput(`MOVE ${point.x} ${point.y}`); }
     else if (input?.type === "button") writeWindowsInput(`BUTTON ${input.button===2?"right":input.button===1?"middle":"left"} ${input.down?"down":"up"}`);
     else if (input?.type === "wheel") writeWindowsInput(`WHEEL ${Math.round(-Number(input.delta)*2)}`);
     else if (input?.type === "key") writeWindowsInput(`KEY ${String(input.key)} ${input.down?"down":"up"}`);

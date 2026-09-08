@@ -229,6 +229,8 @@ elements.sessionId.addEventListener("input", () => {
 elements.video.tabIndex = 0;
 let pendingMove;
 let moveTimer;
+let inputSequence = 0;
+function sequencedInput(event) { return { ...event, seq: ++inputSequence }; }
 function screenPosition(event) {
   const rect = elements.video.getBoundingClientRect();
   const sourceRatio = (elements.video.videoWidth || rect.width) / (elements.video.videoHeight || rect.height);
@@ -242,17 +244,26 @@ function screenPosition(event) {
 elements.video.addEventListener("pointermove", (event) => {
   if (!capabilities.control) return;
   const position = screenPosition(event); if (!position) return;
-  pendingMove = { type: "move", ...position };
+  pendingMove = sequencedInput({ type: "move", ...position });
   if (!moveTimer) moveTimer = setTimeout(() => { sendRealtimeInput(pendingMove); moveTimer = undefined; }, 20);
 });
+function sendPointerButton(event, down) {
+  if (!capabilities.control) return;
+  const position = screenPosition(event);
+  if (position) sendControl({ kind: "input", event: sequencedInput({ type: "move", ...position }) });
+  sendControl({ kind: "input", event: { type: "button", button: event.button, down } });
+}
 elements.video.addEventListener("pointerdown", (event) => {
   elements.video.focus();
   keyboardCapture = capabilities.control;
   if (keyboardCapture) { elements.modeBadge.textContent = "CONTROL ENABLED • KEYBOARD"; log("จับคีย์บอร์ดแล้ว"); }
   elements.video.setPointerCapture(event.pointerId);
-  if (capabilities.control) sendControl({ kind: "input", event: { type: "button", button: event.button, down: true } });
+  sendPointerButton(event, true);
 });
-elements.video.addEventListener("pointerup", (event) => { if (elements.video.hasPointerCapture(event.pointerId)) elements.video.releasePointerCapture(event.pointerId); if (capabilities.control) sendControl({ kind: "input", event: { type: "button", button: event.button, down: false } }); });
+elements.video.addEventListener("pointerup", (event) => {
+  if (elements.video.hasPointerCapture(event.pointerId)) elements.video.releasePointerCapture(event.pointerId);
+  sendPointerButton(event, false);
+});
 elements.video.addEventListener("contextmenu", (event) => event.preventDefault());
 elements.video.addEventListener("wheel", (event) => { if (capabilities.control) { event.preventDefault(); sendControl({ kind: "input", event: { type: "wheel", delta: event.deltaY } }); } }, { passive: false });
 

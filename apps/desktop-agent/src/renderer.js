@@ -94,16 +94,29 @@ async function acceptOffer(sdp) {
 }
 
 let latestMove;
+let latestMoveSequence = 0;
 let moveInFlight = false;
-async function queueInput(event) {
+let moveDrainPromise = Promise.resolve();
+function queueInput(event) {
   if (event?.type !== "move") return window.remoteAgent.input(event);
+  const sequence = Number(event.seq);
+  if (Number.isFinite(sequence) && sequence <= latestMoveSequence) return Promise.resolve();
+  if (Number.isFinite(sequence)) latestMoveSequence = sequence;
   latestMove = event;
-  if (moveInFlight) return;
-  moveInFlight = true;
-  try { while (latestMove) { const current = latestMove; latestMove = undefined; await window.remoteAgent.input(current); } }
-  finally { moveInFlight = false; }
+  if (!moveInFlight) {
+    moveInFlight = true;
+    moveDrainPromise = (async () => {
+      try {
+        while (latestMove) {
+          const current = latestMove;
+          latestMove = undefined;
+          await window.remoteAgent.input(current);
+        }
+      } finally { moveInFlight = false; }
+    })();
+  }
+  return moveDrainPromise;
 }
-
 async function adaptVideoQuality() {
   if (!videoSender) return;
   const stats = await videoSender.getStats(); let loss = 0; let rtt = 0;
@@ -137,13 +150,13 @@ async function handleControl(message) {
 function attachControlChannel(channel) {
   controlChannel = channel;
   channel.onopen = () => channel.send(JSON.stringify({ kind: "capabilities", platform: window.remoteAgent.platform, control: elements.allowControl.checked, clipboard: elements.allowClipboard.checked, files: elements.allowFiles.checked }));
-  channel.onmessage = async ({ data }) => {
-    try { await handleControl(JSON.parse(data)); }
-    catch (error) {
+  let queue = Promise.resolve();
+  channel.onmessage = ({ data }) => {
+    queue = queue.then(() => handleControl(JSON.parse(data))).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       setStatus(`ควบคุมไม่ได้: ${message}`);
       if (channel.readyState === "open") channel.send(JSON.stringify({ kind: "input-error", message }));
-    }
+    });
   };
   channel.onclose = () => { controlChannel = undefined; };
 }
@@ -259,7 +272,7 @@ function stop(reason = "ตัดการเชื่อมต่อแล้�
   peer?.close(); peer = undefined;
   controlChannel?.close(); controlChannel = undefined; inputChannel?.close(); inputChannel = undefined; incomingFiles.clear();
   fileChannel?.close(); fileChannel = undefined; binaryFile = undefined;
-  pendingIceCandidates.length = 0; clearInterval(qualityTimer); qualityTimer = undefined; videoSender = undefined;
+  pendingIceCandidates.length = 0; latestMove = undefined; latestMoveSequence = 0; clearInterval(qualityTimer); qualityTimer = undefined; videoSender = undefined;
   stream?.getTracks().forEach((track) => track.stop()); stream = undefined;
   elements.preview.srcObject = null; elements.preview.hidden = true;
   elements.stop.hidden = true; elements.start.disabled = !elements.consent.checked;
