@@ -33,6 +33,11 @@ function validIdentity(sessionId: string, token: string): boolean {
   return /^\d{9}$/.test(sessionId) && /^\d{6}$/.test(token);
 }
 
+function rejectSocket(socket: WebSocket, code: number, reason: string): void {
+  socket.close(code, reason);
+  setTimeout(() => { if (socket.readyState !== WebSocket.CLOSED) socket.terminate(); }, 250).unref();
+}
+
 const httpServer = createServer((request, response) => {
   if (request.url === "/health") {
     response.writeHead(200, { "content-type": "application/json" });
