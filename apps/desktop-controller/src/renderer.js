@@ -42,9 +42,7 @@ function saveCurrentDevice() {
 }
 
 function rtcConfiguration() {
-  let hostname = "";
-  try { hostname = new URL(elements.server.value).hostname; } catch {}
-  const turnUrl = elements.turnServer.value.trim() || (hostname && !hostname.endsWith(".ts.net") ? `turn:${hostname}:3478` : "");
+  const turnUrl = elements.turnServer.value.trim();
   const iceServers = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
   if (turnUrl) iceServers.push({ urls: [turnUrl, `${turnUrl}?transport=tcp`], username: elements.turnUsername.value, credential: elements.turnPassword.value });
   return { iceServers, iceTransportPolicy: elements.forceRelay.checked ? "relay" : "all", iceCandidatePoolSize: 10 };
@@ -318,3 +316,4 @@ if (window.gsap) {
   window.gsap.from(".viewer", { opacity: 0, scale: .985, duration: .7, ease: "power2.out" });
 }
 loadAddressBook();
+

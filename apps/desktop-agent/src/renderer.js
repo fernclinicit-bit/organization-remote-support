@@ -45,9 +45,7 @@ async function loadDisplays() {
 }
 
 function rtcConfiguration() {
-  let hostname = "";
-  try { hostname = new URL(elements.server.value).hostname; } catch {}
-  const turnUrl = elements.turnServer.value.trim() || (hostname && !hostname.endsWith(".ts.net") ? `turn:${hostname}:3478` : "");
+  const turnUrl = elements.turnServer.value.trim();
   const iceServers = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
   if (turnUrl) iceServers.push({ urls: [turnUrl, `${turnUrl}?transport=tcp`], username: elements.turnUsername.value, credential: elements.turnPassword.value });
   return { iceServers, iceTransportPolicy: elements.forceRelay.checked ? "relay" : "all", iceCandidatePoolSize: 10 };
@@ -242,3 +240,4 @@ if (window.gsap) {
   window.gsap.from(".brand > *", { opacity: 0, x: -24, duration: .65, stagger: .08, ease: "power2.out" });
   window.gsap.from(".panel > *", { opacity: 0, y: 16, duration: .5, stagger: .035, ease: "power2.out" });
 }
+
