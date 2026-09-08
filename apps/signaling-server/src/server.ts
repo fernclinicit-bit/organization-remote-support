@@ -36,7 +36,7 @@ function validIdentity(sessionId: string, token: string): boolean {
 const httpServer = createServer((request, response) => {
   if (request.url === "/health") {
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ status: "ok", instance: randomUUID() }));
+    response.end(JSON.stringify({ status: "ok", instance: randomUUID(), revision: process.env.RENDER_GIT_COMMIT ?? "local" }));
     return;
   }
   response.writeHead(404).end();
