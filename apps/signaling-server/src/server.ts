@@ -48,7 +48,7 @@ wss.on("connection", (socket, request) => {
   let identity: { sessionId: string; role: PeerRole } | undefined;
   const address = request.headers["x-forwarded-for"]?.toString().split(",")[0].trim() || request.socket.remoteAddress || "unknown";
 
-  if (!authAllowed(address)) { socket.close(4429, "too many authentication attempts"); return; }
+  if (!authAllowed(address)) { rejectSocket(socket, 4429, "too many authentication attempts"); return; }
 
   const authenticationTimeout = setTimeout(() => socket.close(4401, "authentication required"), 5_000);
 
@@ -60,7 +60,7 @@ wss.on("connection", (socket, request) => {
     if (!identity) {
       if (message.type !== "hello" || !validIdentity(message.sessionId, message.joinToken)) {
         recordAuthFailure(address);
-        socket.close(4401, "invalid credentials");
+        rejectSocket(socket, 4401, "invalid credentials");
         return;
       }
       let session = sessions.get(message.sessionId);
@@ -69,7 +69,7 @@ wss.on("connection", (socket, request) => {
         sessions.set(message.sessionId, session);
       } else if (!equalSecret(message.joinToken, session.joinToken)) {
         recordAuthFailure(address);
-        socket.close(4401, "invalid session ID or password");
+        rejectSocket(socket, 4401, "invalid session ID or password");
         return;
       }
       if (!session) { socket.close(4500, "session unavailable"); return; }
