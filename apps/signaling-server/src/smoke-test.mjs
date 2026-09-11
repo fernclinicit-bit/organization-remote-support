@@ -36,7 +36,11 @@ await new Promise((resolve, reject) => {
   const intruder = new WebSocket(url);
   const timer = setTimeout(() => reject(new Error("invalid password was not rejected")), 20_000);
   intruder.on("open", () => intruder.send(JSON.stringify({ type: "hello", sessionId, joinToken: token === "999999" ? "888888" : "999999", role: "controller" })));
-  intruder.on("close", (code) => { clearTimeout(timer); code === 4401 ? resolve() : reject(new Error(`unexpected rejection code ${code}`)); });
+  intruder.on("message", (raw) => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === "error" && message.code === "4401") { clearTimeout(timer); intruder.close(); resolve(); }
+  });
+  intruder.on("close", (code) => { if (code === 4401) { clearTimeout(timer); resolve(); } });
   intruder.on("error", reject);
 });
 
