@@ -26,9 +26,9 @@
         <label class="check"><input id="autoReconnect" type="checkbox" checked /> เชื่อมต่อใหม่อัตโนมัติเมื่อสัญญาณหลุด</label>
         <details class="networkSettings">
           <summary>ตั้งค่า Internet / TURN</summary>
-          <label>TURN server (เว้นว่างเพื่อใช้ host เดียวกับ Signaling)<input id="turnServer" placeholder="turn:remote.example.org:3478" autocomplete="off" /></label>
-          <label>TURN username<input id="turnUsername" value="remote-service" autocomplete="off" /></label>
-          <label>TURN password<input id="turnPassword" type="password" value="047984" autocomplete="off" /></label>
+          <label>TURN สำรองแบบกำหนดเอง (ปกติรับอัตโนมัติจาก Signaling)<input id="turnServer" placeholder="turn:remote.example.org:3478" autocomplete="off" /></label>
+          <label>TURN username<input id="turnUsername" autocomplete="off" /></label>
+          <label>TURN password<input id="turnPassword" type="password" autocomplete="off" /></label>
           <label class="check"><input id="forceRelay" type="checkbox" /> บังคับวิ่งผ่าน TURN (สำหรับทดสอบต่างเครือข่าย)</label>
         </details>
         <button id="connect">เชื่อมต่อ</button>
@@ -44,8 +44,7 @@
             <button class="secondary" data-shortcut="LeftMeta,Tab">Win+Tab</button>
             <button class="secondary" data-shortcut="LeftMeta,LeftShift,S">Win+Shift+S</button>
           </div>
-          <button id="sendClipboard" class="secondary">ส่งคลิปบอร์ดไป Agent</button>
-          <button id="getClipboard" class="secondary">รับคลิปบอร์ดจาก Agent</button>
+          <div id="clipboardSyncStatus" class="syncStatus">คลิปบอร์ด Auto Sync: รอสิทธิ์จาก Agent</div>
           <label class="fileButton">ส่งไฟล์ (สูงสุด 25 MB)<input id="file" type="file" /></label>
         </section>
         <section class="info">
@@ -65,4 +64,3 @@
     <script type="module" src="renderer.js"></script>
   </body>
 </html>
-

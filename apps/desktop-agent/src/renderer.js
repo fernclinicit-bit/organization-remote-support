@@ -19,6 +19,10 @@ let controlChannel;
 let inputChannel;
 let videoSender;
 let qualityTimer;
+let adminMode = false;
+let relayAvailable = false;
+let signalingTimer;
+let iceTimer;
 const incomingFiles = new Map();
 let fileChannel;
 let binaryFile;
@@ -47,11 +51,23 @@ async function loadDisplays() {
   elements.displaySource.replaceChildren(...displays.map(({ id, name }) => Object.assign(document.createElement("option"), { value: id, textContent: name })));
 }
 
-function rtcConfiguration() {
+function rtcConfiguration(managedIceServers) {
   const turnUrl = elements.turnServer.value.trim();
-  const iceServers = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
-  if (turnUrl) iceServers.push({ urls: [turnUrl, `${turnUrl}?transport=tcp`], username: elements.turnUsername.value, credential: elements.turnPassword.value });
+  const fallback = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+  const iceServers = Array.isArray(managedIceServers) && managedIceServers.length ? [...managedIceServers] : fallback;
+  if (turnUrl) {
+    const urls = turnUrl.includes("?transport=") ? [turnUrl] : [turnUrl, `${turnUrl}?transport=tcp`];
+    iceServers.push({ urls, username: elements.turnUsername.value, credential: elements.turnPassword.value });
+  }
   return { iceServers, iceTransportPolicy: elements.forceRelay.checked ? "relay" : "all", iceCandidatePoolSize: 10 };
+}
+
+function applyNetworkConfiguration(message) {
+  const manualRelay = Boolean(elements.turnServer.value.trim());
+  relayAvailable = manualRelay || message.relayAvailable === true;
+  peer.setConfiguration(rtcConfiguration(message.iceServers));
+  if (elements.forceRelay.checked && !relayAvailable) throw new Error("Signaling ยังไม่มี TURN relay — ไม่สามารถบังคับ Relay ได้");
+  setStatus(relayAvailable ? "TURN relay พร้อม · รอเจ้าหน้าที่เชื่อมต่อ…" : "รอเจ้าหน้าที่เชื่อมต่อ… · ไม่มี TURN fallback", true);
 }
 
 async function addRemoteCandidate(candidate) {
@@ -86,6 +102,8 @@ function send(message) {
 }
 
 async function acceptOffer(sdp) {
+  clearTimeout(iceTimer);
+  iceTimer = setTimeout(() => stop(relayAvailable ? "WebRTC ใช้เวลานานเกินไป — ตรวจ Firewall/TURN" : "เชื่อมต่อข้ามเครือข่ายไม่ได้ — Signaling ยังไม่มี TURN relay"), 30_000);
   await peer.setRemoteDescription({ type: "offer", sdp });
   await flushRemoteCandidates();
   const answer = await peer.createAnswer();
@@ -132,7 +150,7 @@ async function handleControl(message) {
   if (message.kind === "clipboard-set" && elements.allowClipboard.checked) await window.remoteAgent.clipboardWrite(message.text);
   if (message.kind === "clipboard-get" && elements.allowClipboard.checked) {
     const text = await window.remoteAgent.clipboardRead();
-    controlChannel?.send(JSON.stringify({ kind: "clipboard-value", text }));
+    controlChannel?.send(JSON.stringify({ kind: "clipboard-value", text, requestId: message.requestId, generation: message.generation }));
   }
   if (message.kind === "file-start" && elements.allowFiles.checked) {
     if (message.size > 25 * 1024 * 1024) return;
@@ -149,7 +167,7 @@ async function handleControl(message) {
 
 function attachControlChannel(channel) {
   controlChannel = channel;
-  channel.onopen = () => channel.send(JSON.stringify({ kind: "capabilities", platform: window.remoteAgent.platform, control: elements.allowControl.checked, clipboard: elements.allowClipboard.checked, files: elements.allowFiles.checked }));
+  channel.onopen = () => channel.send(JSON.stringify({ kind: "capabilities", platform: window.remoteAgent.platform, adminMode, control: elements.allowControl.checked, clipboard: elements.allowClipboard.checked, files: elements.allowFiles.checked }));
   let queue = Promise.resolve();
   channel.onmessage = ({ data }) => {
     queue = queue.then(() => handleControl(JSON.parse(data))).catch((error) => {
@@ -208,8 +226,9 @@ async function start() {
     await window.remoteAgent.setGrants({ control: elements.allowControl.checked, clipboard: elements.allowClipboard.checked, files: elements.allowFiles.checked });
     if (elements.allowControl.checked) {
       const diagnostics = await window.remoteAgent.diagnostics();
+      adminMode = diagnostics.adminMode === true;
       if (window.remoteAgent.platform === "darwin" && diagnostics.permissions.accessibility !== "granted") throw new Error("กรุณาอนุญาต Accessibility ใน System Settings");
-      setStatus(`Native control พร้อม (${diagnostics.screen.width}×${diagnostics.screen.height})`);
+      setStatus(`Native control พร้อม (${diagnostics.screen.width}×${diagnostics.screen.height})${adminMode ? " • ADMIN MODE" : " • STANDARD MODE — หน้าต่างผู้ดูแลต้องใช้ Admin Mode"}`);
     }
     stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } }, audio: false });
     elements.preview.srcObject = stream;
@@ -236,19 +255,27 @@ async function start() {
     peer.onconnectionstatechange = () => {
       setStatus(`WebRTC: ${peer.connectionState}`, peer.connectionState === "connected");
       if (peer.connectionState === "connected") {
+        clearTimeout(iceTimer);
         clearInterval(qualityTimer);
         qualityTimer = setInterval(() => adaptVideoQuality().catch((error) => console.warn("ปรับคุณภาพภาพไม่ได้", error)), 3000);
       }
     };
 
     socket = new WebSocket(elements.server.value);
+    signalingTimer = setTimeout(() => stop("Signaling ไม่ตอบสนองภายใน 20 วินาที"), 20_000);
     socket.addEventListener("open", () => {
+      clearTimeout(signalingTimer);
       send({ type: "hello", sessionId: elements.sessionId.value, joinToken: elements.joinToken.value, role: "agent" });
       setStatus("รอเจ้าหน้าที่เชื่อมต่อ…", true);
       window.remoteAgent.sessionActive(true);
     });
     socket.addEventListener("message", async ({ data }) => {
       const message = JSON.parse(data);
+      if (message.type === "peer-ready") {
+        try { applyNetworkConfiguration(message); }
+        catch (error) { stop(error instanceof Error ? error.message : String(error)); return; }
+      }
+      if (message.type === "error") { stop(`Signaling: ${message.message}`); return; }
       if (message.type === "offer") await acceptOffer(message.sdp);
       if (message.type === "ice-candidate") await addRemoteCandidate(message.candidate);
       if (message.type === "end") stop("เจ้าหน้าที่สิ้นสุด session");
@@ -273,6 +300,7 @@ function stop(reason = "ตัดการเชื่อมต่อแล้�
   controlChannel?.close(); controlChannel = undefined; inputChannel?.close(); inputChannel = undefined; incomingFiles.clear();
   fileChannel?.close(); fileChannel = undefined; binaryFile = undefined;
   pendingIceCandidates.length = 0; latestMove = undefined; latestMoveSequence = 0; clearInterval(qualityTimer); qualityTimer = undefined; videoSender = undefined;
+  clearTimeout(signalingTimer); signalingTimer = undefined; clearTimeout(iceTimer); iceTimer = undefined; relayAvailable = false;
   stream?.getTracks().forEach((track) => track.stop()); stream = undefined;
   elements.preview.srcObject = null; elements.preview.hidden = true;
   elements.stop.hidden = true; elements.start.disabled = !elements.consent.checked;

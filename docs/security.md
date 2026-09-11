@@ -17,14 +17,25 @@ must satisfy all items below.
 - Require visible user consent by default; unattended access needs separate policy.
 - Keep a persistent on-screen indicator and an immediate disconnect control.
 - Block password fields and secure desktops where the OS requires it.
+- Keep Windows UAC enabled. Admin Mode must be installed locally by an
+  administrator and must never change consent-prompt or secure-desktop policy.
+- The Windows Agent requests Administrator privileges at launch. This permits
+  input into elevated applications after local UAC approval; it does not permit
+  remote interaction with the Windows Secure Desktop consent prompt.
+- Suspend remote input while showing the local installer confirmation dialog.
+- Do not add silent package execution or arbitrary remote shell access.
 
 ## Transport and infrastructure
 
 - Terminate only TLS 1.2+ and use WSS for signaling.
 - Prefer WebRTC DTLS-SRTP; TURN credentials must be short-lived.
+- Keep the Cloudflare TURN key and API token only in Render environment variables.
+  Generate a separate expiring TURN credential for each authenticated pairing.
 - Rate-limit authentication, session creation, and join attempts.
 - Separate signaling, identity, audit, and relay services by network policy.
 - Do not record video/audio unless policy explicitly enables it.
+- Treat automatic clipboard synchronization as sensitive-data transfer. Require
+  per-session consent, synchronize text only, and stop immediately on disconnect.
 
 ## Audit and release
 
@@ -33,4 +44,3 @@ must satisfy all items below.
 - Sign and notarize macOS builds; sign Windows installers and binaries.
 - Complete penetration testing, privacy review, incident response, and key rotation.
 - Test macOS Screen Recording/Accessibility permission revocation and Windows UAC behavior.
-

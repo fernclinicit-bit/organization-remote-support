@@ -1,12 +1,19 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
+ipcMain.handle("clipboard:read", () => clipboard.readText().slice(0, 1_000_000));
+ipcMain.handle("clipboard:write", (_event, text) => {
+  clipboard.writeText(String(text).slice(0, 1_000_000));
+  return true;
+});
+
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 async function createWindow() {
   const window = new BrowserWindow({

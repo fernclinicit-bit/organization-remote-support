@@ -29,6 +29,8 @@ button:disabled { opacity: .55; cursor: wait; }
 .check input { width: auto; margin: 0; }
 .shortcutGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 8px 0; }
 .shortcutGrid button { margin: 0; }
+.syncStatus { margin-top: 8px; padding: 10px; border: 1px solid #34415b; border-radius: 8px; color: #9aa7ba; background: #0b1220; font-size: 12px; font-weight: 700; }
+.syncStatus.live { border-color: #25d17f; color: #56e59a; }
 .info { margin-top: 24px; padding: 14px; border: 1px solid #34415b; border-radius: 9px; color: #a9b4c7; font-size: 12px; line-height: 1.5; }
 .info strong { color: #f2c94c; }
 .info p { margin-bottom: 0; }

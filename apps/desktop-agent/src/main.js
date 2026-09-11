@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, powerSaveBlocker, screen, session, systemPreferences } from "electron";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +16,7 @@ let selectedDisplayBounds;
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 function inputHostPath() {
   return app.isPackaged ? path.join(process.resourcesPath, "native", "RemoteInputHost.exe") : path.join(directory, "..", "native", "RemoteInputHost.exe");
@@ -75,6 +76,52 @@ function virtualDesktopPoint(input) {
   };
 }
 
+function isElevated() {
+  if (process.platform !== "win32") return false;
+  try {
+    const groups = execFileSync("whoami.exe", ["/groups", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
+    return /S-1-16-(12288|16384)/.test(groups);
+  } catch { return false; }
+}
+
+async function writeAudit(event, details = {}) {
+  try {
+    const directory = path.join(app.getPath("userData"), "audit");
+    await mkdir(directory, { recursive: true });
+    const record = JSON.stringify({ timestamp: new Date().toISOString(), event, ...details });
+    await appendFile(path.join(directory, "admin-mode.jsonl"), `${record}\n`, "utf8");
+  } catch (error) { console.warn("เขียน audit log ไม่ได้", error); }
+}
+
+async function confirmAndLaunchInstaller(owner, filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (process.platform !== "win32" || ![".exe", ".msi"].includes(extension)) return { offered: false };
+  await writeAudit("installer-received", { name: path.basename(filePath), elevated: isElevated() });
+  if (!isElevated()) return { offered: false, requiresAdminMode: true };
+  const previousGrants = sessionGrants;
+  sessionGrants = Object.freeze({ ...previousGrants, control: false });
+  try {
+    writeWindowsInput("RELEASE");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const result = await dialog.showMessageBox(owner, {
+      type: "warning", title: "ยืนยันการติดตั้งบนเครื่องนี้",
+      message: `อนุญาตให้เปิด ${path.basename(filePath)} ด้วยสิทธิ์ผู้ดูแลหรือไม่`,
+      detail: "Remote input ถูกปิดชั่วคราว กรุณาให้ผู้ใช้ที่อยู่หน้าเครื่องเป็นผู้ยืนยันเท่านั้น UAC จะไม่ถูกปิดหรือแก้ไข",
+      buttons: ["ยกเลิก", "เปิดตัวติดตั้ง"], defaultId: 0, cancelId: 0, noLink: true
+    });
+    if (result.response !== 1) {
+      await writeAudit("installer-rejected", { name: path.basename(filePath) });
+      return { offered: true, launched: false };
+    }
+    const child = extension === ".msi"
+      ? spawn("msiexec.exe", ["/i", filePath], { detached: true, stdio: "ignore", windowsHide: false })
+      : spawn(filePath, [], { detached: true, stdio: "ignore", windowsHide: false });
+    child.unref();
+    await writeAudit("installer-launched", { name: path.basename(filePath) });
+    return { offered: true, launched: true };
+  } finally { sessionGrants = previousGrants; }
+}
+
 async function createWindow() {
   const window = new BrowserWindow({
     width: 980,
@@ -125,7 +172,7 @@ ipcMain.handle("remote:set-grants", (_event, grants) => {
 ipcMain.handle("remote:diagnostics", async () => {
   if (process.platform === "win32") {
     writeWindowsInput("PING");
-    return { platform: process.platform, screen: { width: "Win32", height: "ready" }, permissions: permissionState() };
+    return { platform: process.platform, screen: { width: "Win32", height: "ready" }, permissions: permissionState(), adminMode: isElevated() };
   }
   const nativeInput = await getNativeInput();
   return { platform: process.platform, screen: nativeInput.getScreenSize(), permissions: permissionState() };
@@ -206,7 +253,8 @@ ipcMain.handle("remote:save-file", async (event, file) => {
   const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) return { saved: false };
   await writeFile(result.filePath, bytes);
-  return { saved: true, path: result.filePath };
+  const installer = await confirmAndLaunchInstaller(owner, result.filePath);
+  return { saved: true, path: result.filePath, installer };
 });
 
 app.whenReady().then(createWindow);

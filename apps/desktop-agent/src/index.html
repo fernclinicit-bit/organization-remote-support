@@ -29,9 +29,9 @@
         <label>หน้าจอที่ต้องการแชร์<select id="displaySource"></select></label>
         <details class="networkSettings">
           <summary>ตั้งค่า Internet / TURN</summary>
-          <label>TURN server (เว้นว่างเพื่อใช้ host เดียวกับ Signaling)<input id="turnServer" placeholder="turn:remote.example.org:3478" autocomplete="off" /></label>
-          <label>TURN username<input id="turnUsername" value="remote-service" autocomplete="off" /></label>
-          <label>TURN password<input id="turnPassword" type="password" value="047984" autocomplete="off" /></label>
+          <label>TURN สำรองแบบกำหนดเอง (ปกติรับอัตโนมัติจาก Signaling)<input id="turnServer" placeholder="turn:remote.example.org:3478" autocomplete="off" /></label>
+          <label>TURN username<input id="turnUsername" autocomplete="off" /></label>
+          <label>TURN password<input id="turnPassword" type="password" autocomplete="off" /></label>
           <label class="consent"><input id="forceRelay" type="checkbox" /> บังคับวิ่งผ่าน TURN (สำหรับทดสอบต่างเครือข่าย)</label>
         </details>
         <div id="permissionBox" class="notice"></div>
@@ -39,7 +39,7 @@
         <fieldset>
           <legend>สิทธิ์เพิ่มเติมสำหรับ session นี้</legend>
           <label class="consent"><input id="allowControl" type="checkbox" /> อนุญาตควบคุมเมาส์และคีย์บอร์ด</label>
-          <label class="consent"><input id="allowClipboard" type="checkbox" /> อนุญาตรับส่งข้อความในคลิปบอร์ด</label>
+          <label class="consent"><input id="allowClipboard" type="checkbox" /> อนุญาตซิงก์ข้อความในคลิปบอร์ดอัตโนมัติสองทาง</label>
           <label class="consent"><input id="allowFiles" type="checkbox" /> อนุญาตรับไฟล์ (ถาม Save As ทุกครั้ง)</label>
         </fieldset>
         <button id="start" disabled>เริ่มแชร์หน้าจอ</button>
@@ -52,4 +52,3 @@
     <script type="module" src="renderer.js"></script>
   </body>
 </html>
-

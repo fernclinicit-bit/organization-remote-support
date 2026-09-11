@@ -4,4 +4,5 @@ dist/
 *.log
 .DS_Store
 apps/*/release/
+apps/desktop-agent/service/RemoteSupportService.exe
 tools/

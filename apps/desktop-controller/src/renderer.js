@@ -4,8 +4,8 @@ const elements = {
   disconnect: document.querySelector("#disconnect"), video: document.querySelector("#remoteScreen"),
   placeholder: document.querySelector("#placeholder"), status: document.querySelector("#status"),
   dot: document.querySelector("#dot"), log: document.querySelector("#log"),
-  tools: document.querySelector(".tools"), sendClipboard: document.querySelector("#sendClipboard"),
-  getClipboard: document.querySelector("#getClipboard"), file: document.querySelector("#file"),
+  tools: document.querySelector(".tools"), clipboardSyncStatus: document.querySelector("#clipboardSyncStatus"),
+  file: document.querySelector("#file"),
   capabilities: document.querySelector("#capabilities"), fullscreen: document.querySelector("#fullscreen"),
   viewer: document.querySelector(".viewer"), modeBadge: document.querySelector("#modeBadge"),
   showDesktop: document.querySelector("#showDesktop"), turnServer: document.querySelector("#turnServer"),
@@ -27,6 +27,17 @@ const pendingIceCandidates = [];
 let statsTimer;
 let reconnectTimer;
 let reconnectAttempts = 0;
+let clipboardTimer;
+let clipboardSyncBusy = false;
+let clipboardInitializing = false;
+let clipboardRequestPending = false;
+let clipboardRequestId = 0;
+let clipboardGeneration = 0;
+let lastLocalClipboard;
+let lastRemoteClipboard;
+let relayAvailable = false;
+let signalingTimer;
+let iceTimer;
 
 function normalizedDeviceId() { return elements.sessionId.value.replace(/\D/g, "").slice(0, 9); }
 
@@ -42,11 +53,23 @@ function saveCurrentDevice() {
   devices.unshift({ id, name }); localStorage.setItem("remote-address-book", JSON.stringify(devices.slice(0, 50))); loadAddressBook(); log(`บันทึก ${name} แล้ว`);
 }
 
-function rtcConfiguration() {
+function rtcConfiguration(managedIceServers) {
   const turnUrl = elements.turnServer.value.trim();
-  const iceServers = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
-  if (turnUrl) iceServers.push({ urls: [turnUrl, `${turnUrl}?transport=tcp`], username: elements.turnUsername.value, credential: elements.turnPassword.value });
+  const fallback = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+  const iceServers = Array.isArray(managedIceServers) && managedIceServers.length ? [...managedIceServers] : fallback;
+  if (turnUrl) {
+    const urls = turnUrl.includes("?transport=") ? [turnUrl] : [turnUrl, `${turnUrl}?transport=tcp`];
+    iceServers.push({ urls, username: elements.turnUsername.value, credential: elements.turnPassword.value });
+  }
   return { iceServers, iceTransportPolicy: elements.forceRelay.checked ? "relay" : "all", iceCandidatePoolSize: 10 };
+}
+
+function applyNetworkConfiguration(message) {
+  const manualRelay = Boolean(elements.turnServer.value.trim());
+  relayAvailable = manualRelay || message.relayAvailable === true;
+  peer.setConfiguration(rtcConfiguration(message.iceServers));
+  if (elements.forceRelay.checked && !relayAvailable) throw new Error("Signaling ยังไม่มี TURN relay — ไม่สามารถบังคับ Relay ได้");
+  log(relayAvailable ? "ได้รับ TURN credential แบบชั่วคราวแล้ว" : "ไม่มี TURN relay; จะลองเชื่อมต่อแบบ P2P");
 }
 
 async function addRemoteCandidate(candidate) {
@@ -98,14 +121,86 @@ function sendRealtimeInput(event) {
   if (inputChannel?.readyState === "open" && inputChannel.bufferedAmount < 64_000) inputChannel.send(JSON.stringify({ kind: "input", event }));
 }
 
+function setClipboardSyncStatus(text, live = false) {
+  elements.clipboardSyncStatus.textContent = `คลิปบอร์ด Auto Sync: ${text}`;
+  elements.clipboardSyncStatus.classList.toggle("live", live);
+}
+
+function requestRemoteClipboard() {
+  if (clipboardRequestPending || controlChannel?.readyState !== "open") return;
+  clipboardRequestPending = true;
+  const requestId = ++clipboardRequestId;
+  sendControl({ kind: "clipboard-get", requestId, generation: clipboardGeneration });
+  setTimeout(() => { if (requestId === clipboardRequestId) clipboardRequestPending = false; }, 1500);
+}
+
+async function clipboardTick() {
+  if (clipboardSyncBusy || !capabilities.clipboard || controlChannel?.readyState !== "open") return;
+  clipboardSyncBusy = true;
+  try {
+    const text = String(await window.remoteController.clipboardRead()).slice(0, 1_000_000);
+    if (!clipboardInitializing && lastLocalClipboard !== undefined && text !== lastLocalClipboard) {
+      clipboardGeneration += 1;
+      lastLocalClipboard = text;
+      lastRemoteClipboard = text;
+      sendControl({ kind: "clipboard-set", text });
+      log("ซิงก์คลิปบอร์ดไป Agent อัตโนมัติ");
+    } else if (lastLocalClipboard === undefined) lastLocalClipboard = text;
+    requestRemoteClipboard();
+  } catch (error) {
+    setClipboardSyncStatus("ผิดพลาด");
+    log(`CLIPBOARD ERROR: ${error instanceof Error ? error.message : String(error)}`);
+  } finally { clipboardSyncBusy = false; }
+}
+
+async function applyRemoteClipboard(message) {
+  clipboardRequestPending = false;
+  const text = String(message.text ?? "").slice(0, 1_000_000);
+  if (clipboardInitializing) {
+    lastRemoteClipboard = text;
+    clipboardInitializing = false;
+    setClipboardSyncStatus("ทำงานอัตโนมัติ", true);
+    return;
+  }
+  if (Number.isFinite(message.generation) && message.generation !== clipboardGeneration) return;
+  if (text === lastRemoteClipboard) return;
+  await window.remoteController.clipboardWrite(text);
+  lastRemoteClipboard = text;
+  lastLocalClipboard = text;
+  log("รับคลิปบอร์ดจาก Agent อัตโนมัติ");
+}
+
+async function startClipboardSync() {
+  if (clipboardTimer) return;
+  clipboardInitializing = true;
+  clipboardRequestPending = false;
+  clipboardGeneration = 0;
+  lastRemoteClipboard = undefined;
+  lastLocalClipboard = String(await window.remoteController.clipboardRead()).slice(0, 1_000_000);
+  setClipboardSyncStatus("กำลังเริ่ม…");
+  requestRemoteClipboard();
+  clipboardTimer = setInterval(clipboardTick, 700);
+}
+
+function stopClipboardSync() {
+  clearInterval(clipboardTimer);
+  clipboardTimer = undefined;
+  clipboardSyncBusy = false;
+  clipboardInitializing = false;
+  clipboardRequestPending = false;
+  lastLocalClipboard = undefined;
+  lastRemoteClipboard = undefined;
+  setClipboardSyncStatus("ไม่ได้รับอนุญาต");
+}
+
 function updateCapabilities(value) {
   capabilities = value;
-  elements.capabilities.textContent = `สิทธิ์: ควบคุม ${value.control ? "✓" : "–"} · คลิปบอร์ด ${value.clipboard ? "✓" : "–"} · ไฟล์ ${value.files ? "✓" : "–"}`;
+  elements.capabilities.textContent = `สิทธิ์: ควบคุม ${value.control ? "✓" : "–"} · คลิปบอร์ด ${value.clipboard ? "✓" : "–"} · ไฟล์ ${value.files ? "✓" : "–"} · Admin ${value.adminMode ? "✓" : "–"}`;
   elements.video.classList.toggle("control", value.control);
   elements.modeBadge.textContent = value.control ? "CONTROL ENABLED" : "VIEW ONLY";
   elements.modeBadge.classList.toggle("control", value.control);
-  elements.sendClipboard.disabled = !value.clipboard;
-  elements.getClipboard.disabled = !value.clipboard;
+  if (value.clipboard) startClipboardSync().catch((error) => { setClipboardSyncStatus("เริ่มไม่ได้"); log(`CLIPBOARD ERROR: ${error.message}`); });
+  else stopClipboardSync();
   elements.file.disabled = !value.files;
 }
 
@@ -115,9 +210,10 @@ function attachControlChannel(channel) {
   channel.onmessage = async ({ data }) => {
     const message = JSON.parse(data);
     if (message.kind === "capabilities") updateCapabilities(message);
-    if (message.kind === "clipboard-value") { await navigator.clipboard.writeText(message.text); log("คัดลอกข้อความจาก Agent แล้ว"); }
+    if (message.kind === "clipboard-value") await applyRemoteClipboard(message);
     if (message.kind === "input-error") { setStatus(`Agent ปฏิเสธ input: ${message.message}`); log(`INPUT ERROR: ${message.message}`); }
   };
+  channel.onclose = () => { controlChannel = undefined; stopClipboardSync(); };
 }
 
 function attachInputChannel(channel) {
@@ -146,6 +242,8 @@ async function createOffer() {
   await peer.setLocalDescription(offer);
   send({ type: "offer", sdp: offer.sdp });
   log("ส่ง WebRTC offer แล้ว");
+  clearTimeout(iceTimer);
+  iceTimer = setTimeout(() => disconnect(relayAvailable ? "WebRTC ใช้เวลานานเกินไป — ตรวจ Firewall/TURN" : "เชื่อมต่อข้ามเครือข่ายไม่ได้ — Signaling ยังไม่มี TURN relay", true), 30_000);
 }
 
 function connect() {
@@ -173,12 +271,14 @@ function connect() {
   };
   peer.onconnectionstatechange = () => {
     log(`WebRTC ${peer.connectionState}`);
-    if (peer.connectionState === "connected") { clearInterval(statsTimer); statsTimer = setInterval(reportConnectionStats, 3000); reportConnectionStats(); }
+    if (peer.connectionState === "connected") { clearTimeout(iceTimer); clearInterval(statsTimer); statsTimer = setInterval(reportConnectionStats, 3000); reportConnectionStats(); }
     if (["failed", "closed", "disconnected"].includes(peer.connectionState)) setStatus(`WebRTC: ${peer.connectionState}`);
   };
 
   socket = new WebSocket(elements.server.value);
+  signalingTimer = setTimeout(() => { if (peer) disconnect("Signaling ไม่ตอบสนองภายใน 20 วินาที", true); }, 20_000);
   socket.addEventListener("open", () => {
+    clearTimeout(signalingTimer);
     send({ type: "hello", sessionId: deviceId, joinToken: password, role: "controller" });
     reconnectAttempts = 0;
     setStatus("รอ Agent ยืนยัน…", true);
@@ -187,7 +287,11 @@ function connect() {
   });
   socket.addEventListener("message", async ({ data }) => {
     const message = JSON.parse(data);
-    if (message.type === "peer-ready") await createOffer();
+    if (message.type === "peer-ready") {
+      try { applyNetworkConfiguration(message); await createOffer(); }
+      catch (error) { disconnect(error instanceof Error ? error.message : String(error)); }
+    }
+    if (message.type === "error") { disconnect(`Signaling: ${message.message}`, message.retryable === true); return; }
     if (message.type === "answer") { await peer.setRemoteDescription({ type: "answer", sdp: message.sdp }); await flushRemoteCandidates(); log("รับ WebRTC answer แล้ว"); }
     if (message.type === "ice-candidate") await addRemoteCandidate(message.candidate);
     if (message.type === "end") disconnect("Agent สิ้นสุด session");
@@ -198,7 +302,7 @@ function connect() {
 
 function disconnect(reason = "ตัดการเชื่อมต่อแล้ว", retry = false) {
   keyboardCapture = false;
-  clearInterval(statsTimer); statsTimer = undefined; pendingIceCandidates.length = 0;
+  clearInterval(statsTimer); statsTimer = undefined; clearTimeout(signalingTimer); signalingTimer = undefined; clearTimeout(iceTimer); iceTimer = undefined; pendingIceCandidates.length = 0; relayAvailable = false;
   if (socket?.readyState === WebSocket.OPEN) send({ type: "end", reason: "controller-disconnected" });
   socket?.close(); socket = undefined;
   peer?.close(); peer = undefined; offerCreated = false;
@@ -312,8 +416,6 @@ elements.showDesktop.addEventListener("click", () => {
   if (capabilities.platform === "win32") keyCombo(["LeftMeta", "D"]);
   else keyCombo(["LeftMeta", "F3"]);
 });
-elements.sendClipboard.addEventListener("click", async () => sendControl({ kind: "clipboard-set", text: await navigator.clipboard.readText() }));
-elements.getClipboard.addEventListener("click", () => sendControl({ kind: "clipboard-get" }));
 async function sendFile(file) {
   if (!file || file.size > 25 * 1024 * 1024 || !capabilities.files) { log("ไฟล์ไม่ถูกต้อง ไม่มีสิทธิ์ หรือเกิน 25 MB"); return; }
   if (fileChannel?.readyState !== "open") { log("ช่องส่งไฟล์ยังไม่พร้อม"); return; }

@@ -7,6 +7,13 @@ services:
     startCommand: npm run start -w @remote/signaling-server
     healthCheckPath: /health
     autoDeployTrigger: commit
+    envVars:
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false
+      - key: TURN_CREDENTIAL_TTL
+        value: "86400"
     buildFilter:
       paths:
         - apps/signaling-server/**

@@ -48,7 +48,45 @@ first; the signaling server announces when both peers are ready.
 
 Remote control, clipboard, and file transfer are separate session grants on the
 Agent. File transfer is capped at 25 MB and always opens a local Save As dialog.
+Clipboard text is synchronized automatically in both directions only after the
+Agent grants clipboard access for that session. Pre-session clipboard contents are
+used only as a baseline and are not transmitted until either side copies new text.
 The Agent emergency disconnect shortcut is `Ctrl+Alt+Shift+Esc`.
+
+## Public Internet / TURN
+
+The Render service handles WSS signaling only. Reliable connections between
+different networks require a public TURN relay. Configure these secret environment
+variables on the existing Render service (Dashboard values are required for an
+existing Blueprint):
+
+- `CLOUDFLARE_TURN_KEY_ID`
+- `CLOUDFLARE_TURN_API_TOKEN`
+- `TURN_CREDENTIAL_TTL` (defaults to `86400` seconds)
+
+The signaling service requests short-lived ICE credentials for each authenticated
+pairing and sends them in `peer-ready`. The long-lived Cloudflare API token never
+leaves the server. If TURN is missing, the apps show an explicit warning and try
+STUN/P2P only. Manual TURN fields remain available as an emergency override.
+
+## Windows Admin Mode
+
+Admin Mode is distributed as a separate ZIP under the Agent release directory.
+
+The Windows Agent executable requests Administrator privileges when it starts.
+Approve the Windows UAC prompt locally once, then the remote operator can control
+ordinary elevated installer windows. Windows Secure Desktop UAC prompts remain
+local-only and UAC is not disabled or bypassed.
+Run `Install-AdminMode.ps1` from an elevated PowerShell window on the endpoint.
+It registers a watchdog Windows Service and an interactive Scheduled Task with
+`RunLevel Highest`; it does not disable or modify UAC. The signed-in user must
+belong to Local Administrators.
+
+When an elevated Agent receives an `.exe` or `.msi`, remote input is suspended
+and the person physically at the endpoint must confirm before the installer is
+started. The Agent does not provide silent installation or arbitrary remote
+command execution. Admin events are recorded in the Agent user-data directory
+under `audit/admin-mode.jsonl`.
 
 ## Production gate
 
