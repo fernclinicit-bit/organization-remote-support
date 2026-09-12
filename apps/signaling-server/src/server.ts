@@ -129,8 +129,9 @@ wss.on("connection", (socket, request) => {
       failures.delete(address);
       identity = { sessionId: message.sessionId, role: message.role };
       const peers = session.peers;
-      peers.get(message.role)?.close(4409, "role already connected");
+      const previousPeer = peers.get(message.role);
       peers.set(message.role, socket);
+      previousPeer?.close(4409, "role already connected");
       if (peers.has("agent") && peers.has("controller")) void announceReady(session);
       return;
     }
@@ -145,7 +146,8 @@ wss.on("connection", (socket, request) => {
     clearTimeout(authenticationTimeout);
     if (!identity) return;
     const session = sessions.get(identity.sessionId);
-    session?.peers.delete(identity.role);
+    if (!session || session.peers.get(identity.role) !== socket) return;
+    session.peers.delete(identity.role);
     if (identity.role === "agent" || !session?.peers.size) sessions.delete(identity.sessionId);
   });
 });

@@ -54,12 +54,26 @@ async function loadDisplays() {
 function rtcConfiguration(managedIceServers) {
   const turnUrl = elements.turnServer.value.trim();
   const fallback = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
-  const iceServers = Array.isArray(managedIceServers) && managedIceServers.length ? [...managedIceServers] : fallback;
+  const source = Array.isArray(managedIceServers) && managedIceServers.length ? managedIceServers : fallback;
+  const iceServers = source.map((server) => {
+    const urls = Array.isArray(server.urls) ? [...server.urls] : [server.urls];
+    urls.sort((left, right) => iceUrlPriority(left) - iceUrlPriority(right));
+    return { ...server, urls };
+  });
   if (turnUrl) {
     const urls = turnUrl.includes("?transport=") ? [turnUrl] : [turnUrl, `${turnUrl}?transport=tcp`];
     iceServers.push({ urls, username: elements.turnUsername.value, credential: elements.turnPassword.value });
   }
-  return { iceServers, iceTransportPolicy: elements.forceRelay.checked ? "relay" : "all", iceCandidatePoolSize: 10 };
+  return { iceServers, iceTransportPolicy: elements.forceRelay.checked ? "relay" : "all", iceCandidatePoolSize: 0 };
+}
+
+function iceUrlPriority(url) {
+  if (/^turns:.*:443(?:\?|$)/i.test(url)) return 0;
+  if (/^turn:.*:80(?:\?|$)/i.test(url)) return 1;
+  if (/^turns:/i.test(url)) return 2;
+  if (/transport=tcp/i.test(url)) return 3;
+  if (/^turn:/i.test(url)) return 4;
+  return 5;
 }
 
 function applyNetworkConfiguration(message) {
@@ -247,6 +261,10 @@ async function start() {
       if (track.kind === "video") videoSender = sender;
     }
     peer.onicecandidate = ({ candidate }) => { if (candidate) send({ type: "ice-candidate", candidate }); };
+    peer.onicecandidateerror = ({ errorCode, errorText }) => setStatus(`TURN/ICE ${errorCode}: ${errorText}`);
+    peer.onicegatheringstatechange = () => {
+      if (peer?.iceGatheringState === "gathering") setStatus("กำลังค้นหาเส้นทาง Internet/TURN…", true);
+    };
     peer.ondatachannel = ({ channel }) => {
       if (channel.label === "control") attachControlChannel(channel);
       if (channel.label === "input") attachInputChannel(channel);
