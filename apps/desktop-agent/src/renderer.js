@@ -238,9 +238,10 @@ async function start() {
   try {
     await window.remoteAgent.selectDisplay(elements.displaySource.value);
     await window.remoteAgent.setGrants({ control: elements.allowControl.checked, clipboard: elements.allowClipboard.checked, files: elements.allowFiles.checked });
+    const diagnostics = await window.remoteAgent.diagnostics();
+    adminMode = diagnostics.adminMode === true;
+    if (window.remoteAgent.platform === "win32" && adminMode) throw new Error("ไม่สามารถจับภาพเมื่อ Agent รันเป็น Administrator — กรุณาปิดแล้วเปิดตามปกติ (ไม่เลือก Run as administrator)");
     if (elements.allowControl.checked) {
-      const diagnostics = await window.remoteAgent.diagnostics();
-      adminMode = diagnostics.adminMode === true;
       if (window.remoteAgent.platform === "darwin" && diagnostics.permissions.accessibility !== "granted") throw new Error("กรุณาอนุญาต Accessibility ใน System Settings");
       setStatus(`Native control พร้อม (${diagnostics.screen.width}×${diagnostics.screen.height})${adminMode ? " • ADMIN MODE" : " • STANDARD MODE — หน้าต่างผู้ดูแลต้องใช้ Admin Mode"}`);
     }
@@ -261,7 +262,9 @@ async function start() {
       if (track.kind === "video") videoSender = sender;
     }
     peer.onicecandidate = ({ candidate }) => { if (candidate) send({ type: "ice-candidate", candidate }); };
-    peer.onicecandidateerror = ({ errorCode, errorText }) => setStatus(`TURN/ICE ${errorCode}: ${errorText}`);
+    peer.onicecandidateerror = ({ errorCode, errorText }) => {
+      if (errorCode !== 701) setStatus(`TURN/ICE ${errorCode}: ${errorText}`);
+    };
     peer.onicegatheringstatechange = () => {
       if (peer?.iceGatheringState === "gathering") setStatus("กำลังค้นหาเส้นทาง Internet/TURN…", true);
     };

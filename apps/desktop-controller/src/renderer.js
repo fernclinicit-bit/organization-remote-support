@@ -277,6 +277,7 @@ function connect() {
   attachFileChannel(peer.createDataChannel("file-transfer", { ordered: true }));
   peer.onicecandidate = ({ candidate }) => { if (candidate) send({ type: "ice-candidate", candidate }); };
   peer.onicecandidateerror = ({ errorCode, errorText, url }) => {
+    if (errorCode === 701) return;
     let protocol = "ICE";
     try { protocol = new URL(url).protocol.replace(":", "").toUpperCase(); } catch {}
     log(`${protocol} ERROR ${errorCode}: ${errorText}`);

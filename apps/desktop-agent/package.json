@@ -1,6 +1,6 @@
 {
   "name": "@remote/desktop-agent",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "private": true,
   "type": "module",
   "main": "src/main.js",
@@ -9,7 +9,7 @@
     "check": "node --check src/main.js && node --check src/preload.cjs && node --check src/renderer.js",
     "dist:win": "electron-builder --win portable --x64",
     "build:service": "powershell -NoProfile -ExecutionPolicy Bypass -File service/Build-Service.ps1",
-    "dist:admin": "powershell -NoProfile -ExecutionPolicy Bypass -File service/Build-AdminBundle.ps1 -Version 0.4.9"
+    "dist:admin": "powershell -NoProfile -ExecutionPolicy Bypass -File service/Build-AdminBundle.ps1 -Version 0.4.10"
   },
   "devDependencies": {
     "electron": "44.1.1",
@@ -40,12 +40,12 @@
       "output": "release"
     },
     "portable": {
-      "requestExecutionLevel": "admin"
+      "requestExecutionLevel": "user"
     },
     "win": {
       "target": "portable",
       "icon": "src/app-icon.png",
-      "requestedExecutionLevel": "requireAdministrator",
+      "requestedExecutionLevel": "asInvoker",
       "artifactName": "Remote-Support-Agent-${version}-Windows-${arch}.${ext}"
     }
   }

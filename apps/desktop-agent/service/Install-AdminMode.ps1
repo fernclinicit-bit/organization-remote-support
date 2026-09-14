@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-  [string]$AgentExecutable = (Join-Path $PSScriptRoot 'Remote-Support-Agent-0.4.9-Windows-x64.exe')
+  [string]$AgentExecutable = (Join-Path $PSScriptRoot 'Remote-Support-Agent-0.4.10-Windows-x64.exe')
 )
 
 $ErrorActionPreference = 'Stop'
