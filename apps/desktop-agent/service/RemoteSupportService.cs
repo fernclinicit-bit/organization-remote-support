@@ -5,7 +5,7 @@ using System.ServiceProcess;
 using System.Timers;
 
 public sealed class RemoteSupportService : ServiceBase {
-  const string TaskName = "Organization Remote Support Admin Agent";
+  static readonly string[] TaskNames = { "Organization Remote Support Elevated Input Broker", "Organization Remote Support Admin Agent" };
   readonly Timer timer = new Timer(30000);
 
   public RemoteSupportService() {
@@ -30,14 +30,16 @@ public sealed class RemoteSupportService : ServiceBase {
   }
 
   static void EnsureAgent() {
-    try {
-      var process = Process.Start(new ProcessStartInfo("schtasks.exe", "/Run /TN \"" + TaskName + "\"") {
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        WindowStyle = ProcessWindowStyle.Hidden
-      });
-      if (process != null) process.Dispose();
-    } catch (Exception error) { Log("watchdog error: " + error.Message); }
+    foreach(var taskName in TaskNames) {
+      try {
+        var process = Process.Start(new ProcessStartInfo("schtasks.exe", "/Run /TN \"" + taskName + "\"") {
+          UseShellExecute = false,
+          CreateNoWindow = true,
+          WindowStyle = ProcessWindowStyle.Hidden
+        });
+        if (process != null) process.Dispose();
+      } catch (Exception error) { Log("watchdog error for " + taskName + ": " + error.Message); }
+    }
   }
 
   protected override void OnStart(string[] args) {

@@ -297,7 +297,7 @@ function connect() {
   };
 
   socket = new WebSocket(elements.server.value);
-  signalingTimer = setTimeout(() => { if (peer) disconnect("Signaling ไม่ตอบสนองภายใน 20 วินาที", true); }, 20_000);
+  signalingTimer = setTimeout(() => { if (peer) disconnect("Signaling ไม่ตอบสนองภายใน 60 วินาที", true); }, 60_000);
   socket.addEventListener("open", () => {
     clearTimeout(signalingTimer);
     send({ type: "hello", sessionId: deviceId, joinToken: password, role: "controller" });

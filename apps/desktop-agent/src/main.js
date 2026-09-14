@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, powerSaveBlocker, screen, session, systemPreferences } from "electron";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +9,11 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 let sessionGrants = Object.freeze({ control: false, clipboard: false, files: false });
 let nativeInputPromise;
 let windowsInputHost;
+let windowsInputHostPromise;
+let windowsInputBroker;
+let windowsInputBrokerHost;
+let windowsInputBrokerPromise;
+let agentProcessElevated = false;
 let suspensionBlocker;
 let selectedDisplayId;
 let selectedDisplayBounds;
@@ -22,19 +27,107 @@ function inputHostPath() {
   return app.isPackaged ? path.join(process.resourcesPath, "native", "RemoteInputHost.exe") : path.join(directory, "..", "native", "RemoteInputHost.exe");
 }
 
-function getWindowsInputHost() {
-  if (windowsInputHost && !windowsInputHost.killed) return windowsInputHost;
+const inputBrokerPipeName = "OrganizationRemoteSupportInput-v1";
+
+function connectWindowsInputBroker(timeout = 1_200) {
+  if (windowsInputBrokerHost && !windowsInputBrokerHost.killed && windowsInputBroker?.writable) return Promise.resolve(windowsInputBroker);
+  if (windowsInputBrokerPromise) return windowsInputBrokerPromise;
   const executable = inputHostPath();
-  if (!existsSync(executable)) throw new Error("RemoteInputHost.exe missing");
-  windowsInputHost = spawn(executable, [], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-  windowsInputHost.on("exit", () => { windowsInputHost = undefined; });
-  return windowsInputHost;
+  if (!existsSync(executable)) return Promise.resolve(undefined);
+  windowsInputBrokerPromise = new Promise((resolve) => {
+    // Electron's main process can block while opening a missing Windows named
+    // pipe. A disposable standard-user helper performs that connection with a
+    // bounded timeout, so screen capture and the Agent UI always stay live.
+    const child = spawn(executable, ["--client", inputBrokerPipeName], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    let settled = false;
+    let buffer = "";
+    const finish = (value) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      if (!value && !child.killed) child.kill();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(undefined), timeout);
+    child.once("error", () => finish(undefined));
+    child.once("exit", () => finish(undefined));
+    child.stderr.on("data", () => {});
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0 || settled) return;
+      const greeting = buffer.slice(0, newline).trim();
+      const match = /^READY (ADMIN|STANDARD) CLIENT_(ADMIN|STANDARD)$/.exec(greeting);
+      if (!match) { finish(undefined); return; }
+      child.stdin.adminMode = match[1] === "ADMIN";
+      child.stdin.transportKind = "broker";
+      agentProcessElevated = match[2] === "ADMIN";
+      windowsInputBrokerHost = child;
+      windowsInputBroker = child.stdin;
+      child.on("exit", () => {
+        if (windowsInputBrokerHost === child) { windowsInputBrokerHost = undefined; windowsInputBroker = undefined; }
+      });
+      child.stdout.on("data", () => {});
+      finish(child.stdin);
+    });
+  });
+  return windowsInputBrokerPromise.finally(() => { windowsInputBrokerPromise = undefined; });
 }
 
-function writeWindowsInput(command) {
-  const host = getWindowsInputHost();
-  if (!host.stdin.writable) throw new Error("RemoteInputHost is not writable");
-  host.stdin.write(`${command}\n`);
+function connectLocalWindowsInputHost(timeout = 1_200) {
+  if (windowsInputHost && !windowsInputHost.killed && windowsInputHost.stdin.writable) return Promise.resolve(windowsInputHost.stdin);
+  if (windowsInputHostPromise) return windowsInputHostPromise;
+  const executable = inputHostPath();
+  if (!existsSync(executable)) throw new Error("RemoteInputHost.exe missing");
+  windowsInputHostPromise = new Promise((resolve, reject) => {
+    const child = spawn(executable, [], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    let settled = false;
+    let buffer = "";
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      if (error && !child.killed) child.kill();
+      error ? reject(error) : resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error("RemoteInputHost handshake timeout")), timeout);
+    child.once("error", (error) => finish(error));
+    child.once("exit", (code) => finish(new Error(`RemoteInputHost exited (${code})`)));
+    child.stderr.on("data", () => {});
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0 || settled) return;
+      const match = /^READY (ADMIN|STANDARD)$/.exec(buffer.slice(0, newline).trim());
+      if (!match) { finish(new Error("RemoteInputHost handshake invalid")); return; }
+      child.stdin.adminMode = match[1] === "ADMIN";
+      child.stdin.transportKind = "local";
+      agentProcessElevated = child.stdin.adminMode;
+      windowsInputHost = child;
+      child.on("exit", () => { if (windowsInputHost === child) windowsInputHost = undefined; });
+      child.stdout.on("data", () => {});
+      finish(undefined, child.stdin);
+    });
+  });
+  return windowsInputHostPromise.finally(() => { windowsInputHostPromise = undefined; });
+}
+
+async function getWindowsInputTransport() {
+  if (windowsInputBrokerHost && !windowsInputBrokerHost.killed && windowsInputBroker?.writable) return windowsInputBroker;
+  if (windowsInputHost && !windowsInputHost.killed && windowsInputHost.stdin.writable) return windowsInputHost.stdin;
+  const broker = await connectWindowsInputBroker();
+  if (broker) {
+    if (windowsInputHost && !windowsInputHost.killed) windowsInputHost.kill();
+    return broker;
+  }
+  return connectLocalWindowsInputHost();
+}
+
+async function writeWindowsInput(command) {
+  const transport = await getWindowsInputTransport();
+  if (!transport.writable) throw new Error("RemoteInputHost is not writable");
+  transport.write(`${command}\n`);
+  return transport;
 }
 
 function getNativeInput() {
@@ -76,14 +169,6 @@ function virtualDesktopPoint(input) {
   };
 }
 
-function isElevated() {
-  if (process.platform !== "win32") return false;
-  try {
-    const groups = execFileSync("whoami.exe", ["/groups", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
-    return /S-1-16-(12288|16384)/.test(groups);
-  } catch { return false; }
-}
-
 async function writeAudit(event, details = {}) {
   try {
     const directory = path.join(app.getPath("userData"), "audit");
@@ -96,12 +181,13 @@ async function writeAudit(event, details = {}) {
 async function confirmAndLaunchInstaller(owner, filePath) {
   const extension = path.extname(filePath).toLowerCase();
   if (process.platform !== "win32" || ![".exe", ".msi"].includes(extension)) return { offered: false };
-  await writeAudit("installer-received", { name: path.basename(filePath), elevated: isElevated() });
-  if (!isElevated()) return { offered: false, requiresAdminMode: true };
+  const transport = await getWindowsInputTransport();
+  const adminBroker = transport.transportKind === "broker" && transport.adminMode === true;
+  await writeAudit("installer-received", { name: path.basename(filePath), adminBroker });
   const previousGrants = sessionGrants;
   sessionGrants = Object.freeze({ ...previousGrants, control: false });
   try {
-    writeWindowsInput("RELEASE");
+    await writeWindowsInput("RELEASE");
     await new Promise((resolve) => setTimeout(resolve, 200));
     const result = await dialog.showMessageBox(owner, {
       type: "warning", title: "ยืนยันการติดตั้งบนเครื่องนี้",
@@ -117,8 +203,8 @@ async function confirmAndLaunchInstaller(owner, filePath) {
       ? spawn("msiexec.exe", ["/i", filePath], { detached: true, stdio: "ignore", windowsHide: false })
       : spawn(filePath, [], { detached: true, stdio: "ignore", windowsHide: false });
     child.unref();
-    await writeAudit("installer-launched", { name: path.basename(filePath) });
-    return { offered: true, launched: true };
+    await writeAudit("installer-launched", { name: path.basename(filePath), adminBroker });
+    return { offered: true, launched: true, adminBroker };
   } finally { sessionGrants = previousGrants; }
 }
 
@@ -171,14 +257,14 @@ ipcMain.handle("remote:set-grants", (_event, grants) => {
 });
 ipcMain.handle("remote:diagnostics", async () => {
   if (process.platform === "win32") {
-    writeWindowsInput("PING");
-    return { platform: process.platform, screen: { width: "Win32", height: "ready" }, permissions: permissionState(), adminMode: isElevated() };
+    const transport = await writeWindowsInput("PING");
+    return { platform: process.platform, screen: { width: "Win32", height: "ready" }, permissions: permissionState(), adminMode: transport.adminMode === true && transport.transportKind === "broker", agentElevated: agentProcessElevated, inputTransport: transport.transportKind };
   }
   const nativeInput = await getNativeInput();
   return { platform: process.platform, screen: nativeInput.getScreenSize(), permissions: permissionState() };
 });
-ipcMain.handle("remote:release-input", () => {
-  if (process.platform === "win32") writeWindowsInput("RELEASE");
+ipcMain.handle("remote:release-input", async () => {
+  if (process.platform === "win32") await writeWindowsInput("RELEASE");
   return true;
 });
 ipcMain.handle("remote:session-active", (_event, active) => {
@@ -201,11 +287,11 @@ for (let index = 0; index <= 9; index += 1) keyMap[`Num${index}`] = String(index
 ipcMain.handle("remote:input", async (_event, input) => {
   if (!sessionGrants.control) throw new Error("remote control not granted");
   if (process.platform === "win32") {
-    if (input?.type === "move") { const point = virtualDesktopPoint(input); writeWindowsInput(`MOVE ${point.x} ${point.y}`); }
-    else if (input?.type === "button") writeWindowsInput(`BUTTON ${input.button===2?"right":input.button===1?"middle":"left"} ${input.down?"down":"up"}`);
-    else if (input?.type === "wheel") writeWindowsInput(`WHEEL ${Math.round(-Number(input.delta)*2)}`);
-    else if (input?.type === "key") writeWindowsInput(`KEY ${String(input.key)} ${input.down?"down":"up"}`);
-    else if (input?.type === "text") writeWindowsInput(`TEXT ${Buffer.from(String(input.text??"").slice(0,2048),"utf8").toString("base64")}`);
+    if (input?.type === "move") { const point = virtualDesktopPoint(input); await writeWindowsInput(`MOVE ${point.x} ${point.y}`); }
+    else if (input?.type === "button") await writeWindowsInput(`BUTTON ${input.button===2?"right":input.button===1?"middle":"left"} ${input.down?"down":"up"}`);
+    else if (input?.type === "wheel") await writeWindowsInput(`WHEEL ${Math.round(-Number(input.delta)*2)}`);
+    else if (input?.type === "key") await writeWindowsInput(`KEY ${String(input.key)} ${input.down?"down":"up"}`);
+    else if (input?.type === "text") await writeWindowsInput(`TEXT ${Buffer.from(String(input.text??"").slice(0,2048),"utf8").toString("base64")}`);
     return true;
   }
   const nativeInput = await getNativeInput();

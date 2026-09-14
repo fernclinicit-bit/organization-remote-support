@@ -1,12 +1,20 @@
+using Microsoft.Win32.SafeHandles;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 
 class RemoteInputHost {
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
   [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint clientProcessId);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int informationClass, ref PROCESS_BASIC_INFORMATION information, int size, out int returnLength);
 
   const uint MOUSE_MOVE=0x0001, MOUSE_LEFTDOWN=0x0002, MOUSE_LEFTUP=0x0004, MOUSE_RIGHTDOWN=0x0008, MOUSE_RIGHTUP=0x0010;
   const uint MOUSE_MIDDLEDOWN=0x0020, MOUSE_MIDDLEUP=0x0040, MOUSE_WHEEL=0x0800;
@@ -18,6 +26,9 @@ class RemoteInputHost {
   [StructLayout(LayoutKind.Explicit)] struct InputUnion { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
   [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx, dy; public uint mouseData, flags, time; public UIntPtr extra; }
   [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort vk, scan; public uint flags, time; public UIntPtr extra; }
+  [StructLayout(LayoutKind.Sequential)] struct PROCESS_BASIC_INFORMATION {
+    public IntPtr Reserved1, PebBaseAddress, Reserved2_0, Reserved2_1, UniqueProcessId, InheritedFromUniqueProcessId;
+  }
 
   static void Submit(params INPUT[] inputs) {
     var sent=SendInput((uint)inputs.Length,inputs,Marshal.SizeOf(typeof(INPUT)));
@@ -55,7 +66,7 @@ class RemoteInputHost {
     throw new ArgumentException("unsupported key");
   }
 
-  static void Execute(string line) {
+  static string Execute(string line) {
     var parts=line.Split(new[]{' '},4);
     switch(parts[0]) {
       case "MOVE":
@@ -70,12 +81,101 @@ class RemoteInputHost {
       case "RELEASE":
         foreach(var vk in new byte[]{0x10,0x11,0x12,0x5B,0x5C}) Submit(new INPUT { type=INPUT_KEYBOARD, u=new InputUnion { ki=new KEYBDINPUT { vk=vk,flags=KEYUP } } });
         SendMouse(0,0,0,MOUSE_LEFTUP); SendMouse(0,0,0,MOUSE_RIGHTUP); SendMouse(0,0,0,MOUSE_MIDDLEUP); break;
-      case "PING": Console.WriteLine("PONG "+GetSystemMetrics(0)+" "+GetSystemMetrics(1)); break;
+      case "PING": return "PONG "+GetSystemMetrics(0)+" "+GetSystemMetrics(1)+" "+(IsElevated()?"ADMIN":"STANDARD");
+      default: throw new ArgumentException("unsupported command");
+    }
+    return null;
+  }
+
+  static bool IsElevated() {
+    var identity=WindowsIdentity.GetCurrent();
+    return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+  }
+
+  static int ParentProcessId(Process process) {
+    var information=new PROCESS_BASIC_INFORMATION(); int returned;
+    if(NtQueryInformationProcess(process.Handle,0,ref information,Marshal.SizeOf(information),out returned)!=0) return 0;
+    return information.InheritedFromUniqueProcessId.ToInt32();
+  }
+
+  static bool IsAuthorizedClient(NamedPipeServerStream pipe, string expectedAgentPath) {
+    uint clientId;
+    if(!GetNamedPipeClientProcessId(pipe.SafePipeHandle,out clientId)) return false;
+    var processId=(int)clientId;
+    // Portable Electron adds a wrapper and the standard-user pipe client adds
+    // one more process. Walk only a short, fixed ancestor chain and require an
+    // exact match with the protected Agent path registered at installation.
+    for(var depth=0;depth<5 && processId>0;depth++) {
+      try {
+        using(var process=Process.GetProcessById(processId)) {
+          if(string.Equals(process.MainModule.FileName,expectedAgentPath,StringComparison.OrdinalIgnoreCase)) return true;
+          processId=ParentProcessId(process);
+        }
+      } catch { return false; }
+    }
+    return false;
+  }
+
+  static PipeSecurity CreatePipeSecurity() {
+    var security=new PipeSecurity();
+    var user=WindowsIdentity.GetCurrent().User;
+    security.SetOwner(user);
+    security.AddAccessRule(new PipeAccessRule(user,PipeAccessRights.ReadWrite,AccessControlType.Allow));
+    security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),PipeAccessRights.FullControl,AccessControlType.Allow));
+    security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null),PipeAccessRights.FullControl,AccessControlType.Allow));
+    return security;
+  }
+
+  static void ProcessStream(Stream input, Stream output, string readyMessage) {
+    using(var reader=new StreamReader(input,Encoding.UTF8,false,4096,true))
+    using(var writer=new StreamWriter(output,new UTF8Encoding(false),4096,true)) {
+      writer.AutoFlush=true; writer.WriteLine(readyMessage);
+      string line;
+      while((line=reader.ReadLine())!=null) {
+        try { var response=Execute(line); if(response!=null) writer.WriteLine(response); }
+        catch(Exception error) { writer.WriteLine("ERROR "+error.Message); }
+      }
     }
   }
 
-  static void Main() {
-    Console.OutputEncoding=Encoding.UTF8; Console.WriteLine("READY");
-    string line; while((line=Console.ReadLine())!=null) { try { Execute(line); } catch(Exception ex) { Console.WriteLine("ERROR "+ex.Message); } }
+  static void RunPipe(string pipeName, string expectedAgentPath) {
+    while(true) {
+      using(var pipe=new NamedPipeServerStream(pipeName,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous,4096,4096,CreatePipeSecurity())) {
+        pipe.WaitForConnection();
+        if(!IsAuthorizedClient(pipe,Path.GetFullPath(expectedAgentPath))) { pipe.Disconnect(); continue; }
+        ProcessStream(pipe,pipe,"READY "+(IsElevated()?"ADMIN":"STANDARD"));
+      }
+    }
+  }
+
+  static void RunClient(string pipeName) {
+    using(var pipe=new NamedPipeClientStream(".",pipeName,PipeDirection.InOut,PipeOptions.None)) {
+      pipe.Connect(900);
+      using(var pipeReader=new StreamReader(pipe,Encoding.UTF8,false,4096,true))
+      using(var pipeWriter=new StreamWriter(pipe,new UTF8Encoding(false),4096,true))
+      using(var input=new StreamReader(Console.OpenStandardInput(),Encoding.UTF8,false,4096,true))
+      using(var output=new StreamWriter(Console.OpenStandardOutput(),new UTF8Encoding(false),4096,true)) {
+        pipeWriter.AutoFlush=true; output.AutoFlush=true;
+        var greeting=pipeReader.ReadLine();
+        if(greeting==null || !greeting.StartsWith("READY ")) throw new IOException("broker handshake failed");
+        output.WriteLine(greeting+" CLIENT_"+(IsElevated()?"ADMIN":"STANDARD"));
+        string line;
+        while((line=input.ReadLine())!=null) {
+          pipeWriter.WriteLine(line);
+          if(line=="PING") {
+            var response=pipeReader.ReadLine();
+            if(response==null) throw new IOException("broker disconnected");
+            output.WriteLine(response);
+          }
+        }
+      }
+    }
+  }
+
+  static void Main(string[] args) {
+    if(args.Length==1 && args[0]=="--check") { Console.WriteLine("INPUT_HOST_OK"); return; }
+    if(args.Length==3 && args[0]=="--pipe") { RunPipe(args[1],args[2]); return; }
+    if(args.Length==2 && args[0]=="--client") { RunClient(args[1]); return; }
+    ProcessStream(Console.OpenStandardInput(),Console.OpenStandardOutput(),"READY "+(IsElevated()?"ADMIN":"STANDARD"));
   }
 }

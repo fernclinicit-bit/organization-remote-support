@@ -240,10 +240,10 @@ async function start() {
     await window.remoteAgent.setGrants({ control: elements.allowControl.checked, clipboard: elements.allowClipboard.checked, files: elements.allowFiles.checked });
     const diagnostics = await window.remoteAgent.diagnostics();
     adminMode = diagnostics.adminMode === true;
-    if (window.remoteAgent.platform === "win32" && adminMode) throw new Error("ไม่สามารถจับภาพเมื่อ Agent รันเป็น Administrator — กรุณาปิดแล้วเปิดตามปกติ (ไม่เลือก Run as administrator)");
+    if (window.remoteAgent.platform === "win32" && diagnostics.agentElevated) throw new Error("ไม่สามารถจับภาพเมื่อ Agent UI รันเป็น Administrator — กรุณาเปิด Agent ตามปกติ ส่วน Admin Mode จะทำงานผ่าน Input Broker แยกต่างหาก");
     if (elements.allowControl.checked) {
       if (window.remoteAgent.platform === "darwin" && diagnostics.permissions.accessibility !== "granted") throw new Error("กรุณาอนุญาต Accessibility ใน System Settings");
-      setStatus(`Native control พร้อม (${diagnostics.screen.width}×${diagnostics.screen.height})${adminMode ? " • ADMIN MODE" : " • STANDARD MODE — หน้าต่างผู้ดูแลต้องใช้ Admin Mode"}`);
+      setStatus(`Native control พร้อม (${diagnostics.screen.width}×${diagnostics.screen.height})${adminMode ? " • ADMIN BROKER" : " • STANDARD MODE — หน้าต่างผู้ดูแลต้องติดตั้ง Admin Broker"}`);
     }
     stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } }, audio: false });
     elements.preview.srcObject = stream;
@@ -285,7 +285,7 @@ async function start() {
     setStatus("แชร์หน้าจอแล้ว · กำลังเชื่อมต่อเซิร์ฟเวอร์…", true);
     socket = new WebSocket(elements.server.value);
     const activeSocket = socket;
-    signalingTimer = setTimeout(() => stop("Signaling ไม่ตอบสนองภายใน 20 วินาที"), 20_000);
+    signalingTimer = setTimeout(() => stop("Signaling ไม่ตอบสนองภายใน 60 วินาที"), 60_000);
     socket.addEventListener("open", () => {
       if (socket !== activeSocket) return;
       clearTimeout(signalingTimer);
