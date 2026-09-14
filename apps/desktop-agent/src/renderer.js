@@ -279,15 +279,19 @@ async function start() {
       }
     };
 
+    setStatus("แชร์หน้าจอแล้ว · กำลังเชื่อมต่อเซิร์ฟเวอร์…", true);
     socket = new WebSocket(elements.server.value);
+    const activeSocket = socket;
     signalingTimer = setTimeout(() => stop("Signaling ไม่ตอบสนองภายใน 20 วินาที"), 20_000);
     socket.addEventListener("open", () => {
+      if (socket !== activeSocket) return;
       clearTimeout(signalingTimer);
       send({ type: "hello", sessionId: elements.sessionId.value, joinToken: elements.joinToken.value, role: "agent" });
       setStatus("รอเจ้าหน้าที่เชื่อมต่อ…", true);
       window.remoteAgent.sessionActive(true);
     });
     socket.addEventListener("message", async ({ data }) => {
+      if (socket !== activeSocket) return;
       const message = JSON.parse(data);
       if (message.type === "peer-ready") {
         try { applyNetworkConfiguration(message); }
@@ -298,8 +302,8 @@ async function start() {
       if (message.type === "ice-candidate") await addRemoteCandidate(message.candidate);
       if (message.type === "end") stop("เจ้าหน้าที่สิ้นสุด session");
     });
-    socket.addEventListener("close", (event) => { if (stream) stop(`การเชื่อมต่อสิ้นสุด (${event.code})`); });
-    socket.addEventListener("error", () => stop("เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ"));
+    socket.addEventListener("close", (event) => { if (socket === activeSocket && stream) stop(`การเชื่อมต่อสิ้นสุด (${event.code})`); });
+    socket.addEventListener("error", () => { if (socket === activeSocket) stop("เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ"); });
     stream.getVideoTracks()[0].addEventListener("ended", () => stop("หยุดแชร์หน้าจอแล้ว"));
     elements.stop.hidden = false;
     elements.regenerateCode.disabled = true;

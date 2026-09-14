@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
-ipcMain.handle("clipboard:read", () => clipboard.readText().slice(0, 1_000_000));
-ipcMain.handle("clipboard:write", (_event, text) => {
-  clipboard.writeText(String(text).slice(0, 1_000_000));
+ipcMain.handle("clipboard:read", async () => (await clipboard.readText()).slice(0, 1_000_000));
+ipcMain.handle("clipboard:write", async (_event, text) => {
+  await clipboard.writeText(String(text).slice(0, 1_000_000));
   return true;
 });
 

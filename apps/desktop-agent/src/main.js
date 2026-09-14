@@ -233,13 +233,14 @@ ipcMain.handle("remote:input", async (_event, input) => {
   return true;
 });
 
-ipcMain.handle("remote:clipboard-read", () => {
+ipcMain.handle("remote:clipboard-read", async () => {
   if (!sessionGrants.clipboard) throw new Error("clipboard access not granted");
-  return clipboard.readText().slice(0, 1_000_000);
+  return (await clipboard.readText()).slice(0, 1_000_000);
 });
-ipcMain.handle("remote:clipboard-write", (_event, text) => {
+ipcMain.handle("remote:clipboard-write", async (_event, text) => {
   if (!sessionGrants.clipboard) throw new Error("clipboard access not granted");
-  clipboard.writeText(String(text).slice(0, 1_000_000));
+  await clipboard.writeText(String(text).slice(0, 1_000_000));
+  return true;
 });
 ipcMain.handle("remote:save-file", async (event, file) => {
   if (!sessionGrants.files) throw new Error("file transfer not granted");
