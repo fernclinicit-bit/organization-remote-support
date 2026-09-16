@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("remoteController", {
   platform: process.platform,
-  appVersion: "0.5.0",
+  appVersion: "0.5.1",
   clipboardRead: () => ipcRenderer.invoke("clipboard:read"),
   clipboardWrite: (text) => ipcRenderer.invoke("clipboard:write", text)
 });

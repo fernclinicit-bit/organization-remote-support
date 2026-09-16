@@ -284,11 +284,17 @@ for (let index = 1; index <= 24; index += 1) keyMap[`F${index}`] = `f${index}`;
 for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") keyMap[letter] = letter.toLowerCase();
 for (let index = 0; index <= 9; index += 1) keyMap[`Num${index}`] = String(index);
 
-ipcMain.handle("remote:input", async (_event, input) => {
+async function injectRemoteInput(input) {
   if (!sessionGrants.control) throw new Error("remote control not granted");
   if (process.platform === "win32") {
     if (input?.type === "move") { const point = virtualDesktopPoint(input); await writeWindowsInput(`MOVE ${point.x} ${point.y}`); }
-    else if (input?.type === "button") await writeWindowsInput(`BUTTON ${input.button===2?"right":input.button===1?"middle":"left"} ${input.down?"down":"up"}`);
+    else if (input?.type === "button") {
+      if (Number.isFinite(Number(input.x)) && Number.isFinite(Number(input.y))) {
+        const point = virtualDesktopPoint(input);
+        await writeWindowsInput(`MOVE ${point.x} ${point.y}`);
+      }
+      await writeWindowsInput(`BUTTON ${input.button===2?"right":input.button===1?"middle":"left"} ${input.down?"down":"up"}`);
+    }
     else if (input?.type === "wheel") await writeWindowsInput(`WHEEL ${Math.round(-Number(input.delta)*2)}`);
     else if (input?.type === "key") await writeWindowsInput(`KEY ${String(input.key)} ${input.down?"down":"up"}`);
     else if (input?.type === "text") await writeWindowsInput(`TEXT ${Buffer.from(String(input.text??"").slice(0,2048),"utf8").toString("base64")}`);
@@ -303,6 +309,10 @@ ipcMain.handle("remote:input", async (_event, input) => {
     const y = Math.round(Math.max(0, Math.min(1, Number(input.y))) * (size.height - 1));
     nativeInput.moveMouse(x, y);
   } else if (input?.type === "button") {
+    if (Number.isFinite(Number(input.x)) && Number.isFinite(Number(input.y))) {
+      const size = nativeInput.getScreenSize();
+      nativeInput.moveMouse(Math.round(Math.max(0, Math.min(1, Number(input.x))) * (size.width - 1)), Math.round(Math.max(0, Math.min(1, Number(input.y))) * (size.height - 1)));
+    }
     const button = input.button === 2 ? "right" : input.button === 1 ? "middle" : "left";
     nativeInput.mouseToggle(input.down ? "down" : "up", button);
   } else if (input?.type === "wheel") {
@@ -317,6 +327,27 @@ ipcMain.handle("remote:input", async (_event, input) => {
     if (value) nativeInput.typeString(value);
   }
   return true;
+}
+
+ipcMain.handle("remote:input", (_event, input) => injectRemoteInput(input));
+
+let latestRealtimeMove;
+let realtimeMoveInFlight = false;
+ipcMain.on("remote:input-realtime", (_event, input) => {
+  if (!sessionGrants.control || input?.type !== "move") return;
+  latestRealtimeMove = input;
+  if (realtimeMoveInFlight) return;
+  realtimeMoveInFlight = true;
+  void (async () => {
+    try {
+      while (latestRealtimeMove) {
+        const current = latestRealtimeMove;
+        latestRealtimeMove = undefined;
+        await injectRemoteInput(current);
+      }
+    } catch (error) { console.warn("Realtime input failed", error); }
+    finally { realtimeMoveInFlight = false; }
+  })();
 });
 
 ipcMain.handle("remote:clipboard-read", async () => {

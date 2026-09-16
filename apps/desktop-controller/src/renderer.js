@@ -38,6 +38,7 @@ let lastRemoteClipboard;
 let relayAvailable = false;
 let signalingTimer;
 let iceTimer;
+const pendingFileTransfers = new Map();
 
 function normalizedDeviceId() { return elements.sessionId.value.replace(/\D/g, "").slice(0, 9); }
 
@@ -103,7 +104,8 @@ async function reportConnectionStats() {
   if (!pair) return;
   const remote = reports.get(pair.remoteCandidateId);
   const route = remote?.candidateType === "relay" ? "TURN relay" : remote?.candidateType === "srflx" ? "Internet P2P" : "เครือข่ายตรง";
-  setStatus(`เชื่อมต่อแล้ว · ${route}`, true);
+  const latency = Number.isFinite(pair.currentRoundTripTime) ? ` · ${Math.round(pair.currentRoundTripTime * 1000)} ms` : "";
+  setStatus(`เชื่อมต่อแล้ว · ${route}${latency}`, true);
 }
 
 function log(text) {
@@ -132,7 +134,7 @@ async function sendControlQueued(message) {
 }
 
 function sendRealtimeInput(event) {
-  if (inputChannel?.readyState === "open" && inputChannel.bufferedAmount < 64_000) inputChannel.send(JSON.stringify({ kind: "input", event }));
+  if (inputChannel?.readyState === "open" && inputChannel.bufferedAmount < 1_024) inputChannel.send(JSON.stringify({ kind: "input", event }));
 }
 
 function setClipboardSyncStatus(text, live = false) {
@@ -244,9 +246,22 @@ function attachFileChannel(channel) {
   channel.onmessage = ({ data }) => {
     if (typeof data !== "string") return;
     const message = JSON.parse(data);
-    if (message.kind === "file-error") log(`FILE ERROR: ${message.message}`);
+    if (message.kind === "file-error") {
+      log(`FILE ERROR: ${message.message}`);
+      const transfer = pendingFileTransfers.get(message.id); pendingFileTransfers.delete(message.id);
+      transfer?.reject(new Error(message.message));
+    }
+    if (message.kind === "file-complete") {
+      const transfer = pendingFileTransfers.get(message.id); pendingFileTransfers.delete(message.id);
+      transfer?.resolve(message);
+    }
+    if (message.kind === "file-verified") log(`Agent ตรวจ SHA-256 ผ่าน (${message.bytes} bytes)`);
   };
-  channel.onclose = () => { fileChannel = undefined; };
+  channel.onclose = () => {
+    fileChannel = undefined;
+    for (const transfer of pendingFileTransfers.values()) transfer.reject(new Error("ช่องส่งไฟล์ถูกตัด"));
+    pendingFileTransfers.clear();
+  };
 }
 
 async function createOffer() {
@@ -370,13 +385,12 @@ elements.video.addEventListener("pointermove", (event) => {
   if (!capabilities.control) return;
   const position = screenPosition(event); if (!position) return;
   pendingMove = sequencedInput({ type: "move", ...position });
-  if (!moveTimer) moveTimer = setTimeout(() => { sendRealtimeInput(pendingMove); moveTimer = undefined; }, 20);
+  if (!moveTimer) moveTimer = setTimeout(() => { sendRealtimeInput(pendingMove); moveTimer = undefined; }, 12);
 });
 function sendPointerButton(event, down) {
   if (!capabilities.control) return;
   const position = screenPosition(event);
-  if (position) sendControl({ kind: "input", event: sequencedInput({ type: "move", ...position }) });
-  sendControl({ kind: "input", event: { type: "button", button: event.button, down } });
+  sendControl({ kind: "input", event: { type: "button", button: event.button, down, ...(position || {}) } });
 }
 elements.video.addEventListener("pointerdown", (event) => {
   elements.video.focus();
@@ -442,22 +456,34 @@ async function sendFile(file) {
   if (fileChannel?.readyState !== "open") { log("ช่องส่งไฟล์ยังไม่พร้อม"); return; }
   const id = crypto.randomUUID();
   const bytes = await file.arrayBuffer();
-  fileChannel.send(JSON.stringify({ kind: "file-start", id, name: file.name, size: file.size }));
+  const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((value) => value.toString(16).padStart(2, "0")).join("");
+  fileChannel.send(JSON.stringify({ kind: "file-start", id, name: file.name, size: bytes.byteLength, sha256 }));
   log(`กำลังส่ง ${file.name} (${Math.ceil(file.size / 1024)} KB)`);
-  for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
-    while (fileChannel.readyState === "open" && fileChannel.bufferedAmount > 512_000) await new Promise((resolve) => setTimeout(resolve, 20));
+  for (let offset = 0; offset < bytes.byteLength; offset += 32 * 1024) {
+    while (fileChannel.readyState === "open" && fileChannel.bufferedAmount > 128_000) await new Promise((resolve) => setTimeout(resolve, 10));
     if (fileChannel.readyState !== "open") throw new Error("ช่องส่งไฟล์ถูกตัด");
-    fileChannel.send(bytes.slice(offset, Math.min(offset + 64 * 1024, bytes.byteLength)));
+    fileChannel.send(bytes.slice(offset, Math.min(offset + 32 * 1024, bytes.byteLength)));
   }
-  fileChannel.send(JSON.stringify({ kind: "file-end", id })); log(`ส่งไฟล์ ${file.name} ครบแล้ว รอ Agent กด Save As`);
+  while (fileChannel.readyState === "open" && fileChannel.bufferedAmount > 0) await new Promise((resolve) => setTimeout(resolve, 10));
+  if (fileChannel.readyState !== "open") throw new Error("ช่องส่งไฟล์ถูกตัด");
+  const completion = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pendingFileTransfers.delete(id); reject(new Error("Agent ไม่ยืนยันการรับไฟล์ภายใน 5 นาที")); }, 300_000);
+    pendingFileTransfers.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+  });
+  fileChannel.send(JSON.stringify({ kind: "file-end", id }));
+  log(`ส่งข้อมูล ${file.name} ครบแล้ว รอ Agent ตรวจ SHA-256 และกด Save As`);
+  const result = await completion;
+  log(result.saved ? `Agent บันทึก ${file.name} สำเร็จ (${result.bytes} bytes)` : `Agent ยกเลิกการบันทึก ${file.name}`);
 }
-elements.file.addEventListener("change", async () => { await sendFile(elements.file.files[0]); elements.file.value = ""; });
+elements.file.addEventListener("change", async () => { try { await sendFile(elements.file.files[0]); } catch (error) { log(`FILE ERROR: ${error instanceof Error ? error.message : String(error)}`); } finally { elements.file.value = ""; } });
 elements.viewer.addEventListener("dragenter", (event) => { event.preventDefault(); log("ตรวจพบไฟล์ที่ลากเข้ามา"); if (capabilities.files) elements.viewer.classList.add("dragging"); });
 elements.viewer.addEventListener("dragover", (event) => { event.preventDefault(); });
 elements.viewer.addEventListener("dragleave", (event) => { if (!elements.viewer.contains(event.relatedTarget)) elements.viewer.classList.remove("dragging"); });
 elements.viewer.addEventListener("drop", async (event) => {
   event.preventDefault(); elements.viewer.classList.remove("dragging");
-  for (const file of event.dataTransfer.files) await sendFile(file);
+  for (const file of event.dataTransfer.files) {
+    try { await sendFile(file); } catch (error) { log(`FILE ERROR: ${error instanceof Error ? error.message : String(error)}`); }
+  }
 });
 if (window.gsap) {
   window.gsap.from("header", { opacity: 0, y: -18, duration: .45, ease: "power2.out" });

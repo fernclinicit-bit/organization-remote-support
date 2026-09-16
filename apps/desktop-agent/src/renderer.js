@@ -26,6 +26,7 @@ let iceTimer;
 const incomingFiles = new Map();
 let fileChannel;
 let binaryFile;
+let fileMessageQueue = Promise.resolve();
 const pendingIceCandidates = [];
 
 function randomDigits(length) {
@@ -125,29 +126,14 @@ async function acceptOffer(sdp) {
   send({ type: "answer", sdp: answer.sdp });
 }
 
-let latestMove;
 let latestMoveSequence = 0;
-let moveInFlight = false;
-let moveDrainPromise = Promise.resolve();
 function queueInput(event) {
   if (event?.type !== "move") return window.remoteAgent.input(event);
   const sequence = Number(event.seq);
   if (Number.isFinite(sequence) && sequence <= latestMoveSequence) return Promise.resolve();
   if (Number.isFinite(sequence)) latestMoveSequence = sequence;
-  latestMove = event;
-  if (!moveInFlight) {
-    moveInFlight = true;
-    moveDrainPromise = (async () => {
-      try {
-        while (latestMove) {
-          const current = latestMove;
-          latestMove = undefined;
-          await window.remoteAgent.input(current);
-        }
-      } finally { moveInFlight = false; }
-    })();
-  }
-  return moveDrainPromise;
+  window.remoteAgent.inputRealtime(event);
+  return Promise.resolve();
 }
 async function adaptVideoQuality() {
   if (!videoSender) return;
@@ -205,31 +191,81 @@ function attachInputChannel(channel) {
 function attachFileChannel(channel) {
   fileChannel = channel;
   channel.binaryType = "arraybuffer";
-  channel.onmessage = async ({ data }) => {
-    try {
-      if (typeof data === "string") {
-        const message = JSON.parse(data);
-        if (message.kind === "file-start" && elements.allowFiles.checked && message.size <= 25 * 1024 * 1024) binaryFile = { name: message.name, size: message.size, received: 0, chunks: [] };
-        if (message.kind === "file-end" && binaryFile && elements.allowFiles.checked) {
-          if (binaryFile.received !== binaryFile.size) throw new Error("ไฟล์ได้รับไม่ครบ");
-          const bytes = new Uint8Array(binaryFile.received); let offset = 0;
-          for (const chunk of binaryFile.chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-          const current = binaryFile; binaryFile = undefined;
-          await window.remoteAgent.saveFile({ name: current.name, bytes });
-        }
-      } else if (binaryFile && elements.allowFiles.checked) {
-        const chunk = new Uint8Array(data); binaryFile.received += chunk.length;
-        if (binaryFile.received > binaryFile.size) throw new Error("ขนาดไฟล์ไม่ตรง");
-        binaryFile.chunks.push(chunk);
-      }
-    } catch (error) {
+  channel.onmessage = ({ data }) => {
+    fileMessageQueue = fileMessageQueue.then(() => handleFileMessage(channel, data)).catch((error) => {
+      const id = binaryFile?.id;
+      if (binaryFile?.endTimer) clearTimeout(binaryFile.endTimer);
       binaryFile = undefined;
       const message = error instanceof Error ? error.message : String(error);
       setStatus(`รับไฟล์ไม่สำเร็จ: ${message}`);
-      if (channel.readyState === "open") channel.send(JSON.stringify({ kind: "file-error", message }));
-    }
+      if (channel.readyState === "open") channel.send(JSON.stringify({ kind: "file-error", id, message }));
+    });
   };
-  channel.onclose = () => { fileChannel = undefined; binaryFile = undefined; };
+  channel.onclose = () => {
+    if (binaryFile?.endTimer) clearTimeout(binaryFile.endTimer);
+    fileChannel = undefined; binaryFile = undefined;
+  };
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function receivedChunk(data) {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
+  throw new Error("รูปแบบข้อมูลไฟล์ไม่รองรับ");
+}
+
+async function finishIncomingFile(channel) {
+  if (!binaryFile?.ended || binaryFile.received !== binaryFile.size) return false;
+  const current = binaryFile;
+  if (current.endTimer) clearTimeout(current.endTimer);
+  const bytes = new Uint8Array(current.received); let offset = 0;
+  for (const chunk of current.chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  const hash = await sha256Hex(bytes);
+  if (hash !== current.sha256) throw new Error("SHA-256 ของไฟล์ไม่ตรง");
+  if (channel.readyState === "open") channel.send(JSON.stringify({ kind: "file-verified", id: current.id, bytes: current.received, sha256: hash }));
+  const result = await window.remoteAgent.saveFile({ name: current.name, bytes });
+  binaryFile = undefined;
+  if (channel.readyState === "open") channel.send(JSON.stringify({ kind: "file-complete", id: current.id, saved: result?.saved === true, bytes: current.received, sha256: hash }));
+  return true;
+}
+
+async function handleFileMessage(channel, data) {
+  if (!elements.allowFiles.checked) return;
+  if (typeof data !== "string") {
+    if (!binaryFile) throw new Error("ได้รับข้อมูลไฟล์โดยไม่มีส่วนเริ่มต้น");
+    const chunk = await receivedChunk(data);
+    binaryFile.received += chunk.length;
+    if (binaryFile.received > binaryFile.size) throw new Error("ขนาดไฟล์เกินข้อมูลที่แจ้ง");
+    binaryFile.chunks.push(chunk);
+    await finishIncomingFile(channel);
+    return;
+  }
+  const message = JSON.parse(data);
+  if (message.kind === "file-start") {
+    if (binaryFile) throw new Error("มีไฟล์อื่นกำลังรับอยู่");
+    const size = Number(message.size);
+    if (!Number.isSafeInteger(size) || size < 0 || size > 25 * 1024 * 1024 || !/^[a-f0-9]{64}$/i.test(message.sha256 || "")) throw new Error("ข้อมูลเริ่มต้นไฟล์ไม่ถูกต้อง");
+    binaryFile = { id: message.id, name: message.name, size, sha256: message.sha256.toLowerCase(), received: 0, chunks: [], ended: false, endTimer: undefined };
+    return;
+  }
+  if (message.kind === "file-end") {
+    if (!binaryFile || message.id !== binaryFile.id) throw new Error("รหัสไฟล์ไม่ตรง");
+    binaryFile.ended = true;
+    if (await finishIncomingFile(channel)) return;
+    binaryFile.endTimer = setTimeout(() => {
+      const missing = binaryFile ? binaryFile.size - binaryFile.received : 0;
+      const id = binaryFile?.id;
+      binaryFile = undefined;
+      const text = `ไฟล์ได้รับไม่ครบ (ขาด ${missing} bytes)`;
+      setStatus(`รับไฟล์ไม่สำเร็จ: ${text}`);
+      if (channel.readyState === "open") channel.send(JSON.stringify({ kind: "file-error", id, message: text }));
+    }, 15_000);
+  }
 }
 
 async function start() {
@@ -323,8 +359,10 @@ function stop(reason = "ตัดการเชื่อมต่อแล้�
   socket?.close(); socket = undefined;
   peer?.close(); peer = undefined;
   controlChannel?.close(); controlChannel = undefined; inputChannel?.close(); inputChannel = undefined; incomingFiles.clear();
-  fileChannel?.close(); fileChannel = undefined; binaryFile = undefined;
-  pendingIceCandidates.length = 0; latestMove = undefined; latestMoveSequence = 0; clearInterval(qualityTimer); qualityTimer = undefined; videoSender = undefined;
+  fileChannel?.close(); fileChannel = undefined;
+  if (binaryFile?.endTimer) clearTimeout(binaryFile.endTimer);
+  binaryFile = undefined;
+  pendingIceCandidates.length = 0; latestMoveSequence = 0; clearInterval(qualityTimer); qualityTimer = undefined; videoSender = undefined;
   clearTimeout(signalingTimer); signalingTimer = undefined; clearTimeout(iceTimer); iceTimer = undefined; relayAvailable = false;
   stream?.getTracks().forEach((track) => track.stop()); stream = undefined;
   elements.preview.srcObject = null; elements.preview.hidden = true;
